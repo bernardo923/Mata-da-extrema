@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ERP Fazenda Mata da Extrema</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="bg-stone-50 text-stone-900">
+  <!-- Loading screen -->
+  <div id="loading-screen" class="fixed inset-0 bg-stone-50 flex items-center justify-center z-50">
+    <div class="text-center">
+      <div class="text-stone-400 text-sm uppercase tracking-widest mb-2">Fazenda</div>
+      <div class="text-2xl font-semibold text-stone-900">Mata da Extrema</div>
+      <div class="text-stone-500 text-sm mt-4">Carregando…</div>
+    </div>
+  </div>
+
+  <!-- Login screen -->
+  <div id="auth-screen" class="fixed inset-0 bg-stone-100 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-lg shadow-xl p-8 max-w-sm w-full">
+      <div class="text-stone-400 text-xs uppercase tracking-widest mb-1">Fazenda</div>
+      <h1 class="text-xl font-semibold text-stone-900 mb-1">Mata da Extrema</h1>
+      <p class="text-sm text-stone-500 mb-6">Entre com a senha de acesso</p>
+      <form id="auth-form" class="space-y-3">
+        <input id="auth-password" type="password" class="input" placeholder="Senha" autocomplete="current-password" autofocus required />
+        <label class="flex items-center gap-2 text-sm text-stone-600">
+          <input id="auth-persist" type="checkbox" /> Manter logado neste dispositivo
+        </label>
+        <button type="submit" class="btn btn-primary w-full justify-center">Entrar</button>
+        <div id="auth-error" class="text-sm text-red-600 hidden"></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-root" class="min-h-screen flex hidden">
+    <!-- Sidebar -->
+    <aside class="w-64 bg-stone-900 text-stone-100 flex-shrink-0 sticky top-0 h-screen overflow-y-auto">
+      <div class="p-5 border-b border-stone-700">
+        <div class="text-xs uppercase tracking-widest text-stone-400">Fazenda</div>
+        <div class="text-lg font-semibold">Mata da Extrema</div>
+      </div>
+      <nav id="nav" class="flex flex-col py-2 text-sm">
+        <a href="#/dashboard" data-route="dashboard" class="nav-link">Dashboard</a>
+        <a href="#/bovinos" data-route="bovinos" class="nav-link">Bovinos</a>
+        <a href="#/pesagens" data-route="pesagens" class="nav-link">Pesagens</a>
+        <a href="#/lotes" data-route="lotes" class="nav-link">Lotes</a>
+        <a href="#/despesas" data-route="despesas" class="nav-link">Despesas operacionais</a>
+        <a href="#/investimentos" data-route="investimentos" class="nav-link">Investimentos</a>
+        <a href="#/vendas" data-route="vendas" class="nav-link">Vendas / Receitas</a>
+        <a href="#/rateio" data-route="rateio" class="nav-link">Rateio &amp; Custos</a>
+        <a href="#/simulador" data-route="simulador" class="nav-link">Simulador de venda</a>
+        <a href="#/relatorios" data-route="relatorios" class="nav-link">Relatórios</a>
+        <div class="border-t border-stone-700 mt-3 pt-3"></div>
+        <a href="#/config" data-route="config" class="nav-link">Configurações da fazenda</a>
+        <a href="#/dados" data-route="dados" class="nav-link">Importar / Exportar</a>
+      </nav>
+      <div class="p-4 mt-4 text-[11px] text-stone-500 leading-relaxed">
+        Dados sincronizados com servidor. Faça backups em <span class="text-stone-300">Importar / Exportar</span>.
+      </div>
+      <div class="p-4 border-t border-stone-700">
+        <button onclick="DB.logout()" class="text-xs text-stone-400 hover:text-white">Sair</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="flex-1 min-w-0">
+      <header class="bg-white border-b border-stone-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+        <div>
+          <h1 id="page-title" class="text-xl font-semibold">Dashboard</h1>
+          <div id="page-subtitle" class="text-xs text-stone-500"></div>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="sync-indicator" class="text-xs text-stone-400"></div>
+          <div class="text-xs text-stone-500">Hoje: <span id="today-date"></span></div>
+          <button id="btn-quick-add" class="bg-stone-900 text-white text-sm px-3 py-1.5 rounded hover:bg-stone-700">+ Novo</button>
+        </div>
+      </header>
+      <section id="view" class="p-8"></section>
+    </main>
+  </div><!-- /#app-root -->
+
+  <!-- Modal -->
+  <div id="modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-stone-200 px-5 py-3">
+        <h2 id="modal-title" class="text-base font-semibold"></h2>
+        <button id="modal-close" class="text-stone-500 hover:text-stone-900 text-xl leading-none">&times;</button>
+      </div>
+      <div id="modal-body" class="p-5"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 bg-stone-900 text-white text-sm px-4 py-2 rounded shadow-lg hidden z-50"></div>
+
+  <script src="js/utils.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/seed.js"></script>
+  <script src="js/views.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

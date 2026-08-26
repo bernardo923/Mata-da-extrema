@@ -159,7 +159,13 @@ const U = {
       out.push(cur.trim());
       return out;
     };
-    const headers = parseLine(lines[0]).map(h => h.toLowerCase().trim());
+    // Normaliza cabeçalhos: minúsculas, sem acentos, sem unidades "(kg)"/"(R$)" e sem espaços
+    const normHeader = (h) => h
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\(.*?\)/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    const headers = parseLine(lines[0]).map(normHeader);
     const rows = lines.slice(1).map(l => {
       const cols = parseLine(l);
       const obj = {};

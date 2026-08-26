@@ -253,10 +253,10 @@ Views.bovinoForm = function (id) {
 };
 
 Views.bovinosImport = function () {
-  const exemplo = `brinco,nome,categoria,sexo,lote,dataEntrada,pesoEntrada,precoArrobaEntrada,custoEntrada,observacoes
-001,Touro 01,Boi,M,Lote A,2024-08-16,380,280,,
-002,Touro 02,Boi,M,Lote A,2024-08-16,395,280,,Reprodutor
-101,Bezerro 01,Bezerro,M,Lote B,2024-09-01,220,290,,`;
+  const exemplo = `brinco,nome,categoria,sexo,lote,dataEntrada,pesoEntrada,precoArrobaEntrada,custoEntrada,pesoAtual,observacoes
+001,Touro 01,Boi,M,Lote A,2024-08-16,380,280,,415,
+002,Touro 02,Boi,M,Lote A,2024-08-16,395,280,,,Reprodutor
+101,Bezerro 01,Bezerro,M,Lote B,2024-09-01,220,290,,260,`;
   U.modal('Importar bovinos via CSV', `
     <div class="space-y-3">
       <div class="text-sm text-stone-600">
@@ -267,8 +267,10 @@ Views.bovinosImport = function () {
           <li><code>dataEntrada</code> — formato AAAA-MM-DD ou DD/MM/AAAA</li>
           <li><code>pesoEntrada</code> (kg), <code>precoArrobaEntrada</code> (R$)</li>
           <li><code>custoEntrada</code> (R$ — opcional, calculado se vazio)</li>
+          <li><code>pesoAtual</code> (kg — opcional, registra uma pesagem na data de hoje)</li>
           <li><code>observacoes</code></li>
         </ul>
+        <p class="text-xs text-stone-500 mt-2">Unidades no cabeçalho são ignoradas — <code>pesoEntrada (kg)</code> funciona igual a <code>pesoEntrada</code>. Se o brinco já existir, o bovino é <strong>atualizado</strong> em vez de duplicado.</p>
       </div>
       <details class="text-xs">
         <summary class="cursor-pointer text-stone-700 hover:text-stone-900">Ver exemplo</summary>
@@ -303,13 +305,15 @@ Views.bovinosImport = function () {
     });
     body.querySelector('#bov-import-btn').addEventListener('click', () => {
       if (!parsed) return;
-      let ok = 0, skip = 0;
+      let ok = 0, atualizados = 0, skip = 0;
       const lotesCache = {};
       DB.lotes.list().forEach(l => { lotesCache[l.nome.toLowerCase()] = l.id; });
+      const brincoIndex = {};
+      DB.bovinos.list().forEach(b => { brincoIndex[b.brinco] = b.id; });
       parsed.rows.forEach(row => {
         const brinco = (row.brinco || '').trim();
         if (!brinco) { skip++; return; }
-        const data = U.parseDateBR(row.dataentrada || row.dataEntrada || '') || U.todayISO();
+        const data = U.parseDateBR(row.dataentrada || '') || U.todayISO();
         const peso = parseFloat(String(row.pesoentrada || '').replace(',', '.')) || 0;
         const preco = parseFloat(String(row.precoarrobaentrada || '').replace(',', '.')) || 0;
         let custo = parseFloat(String(row.custoentrada || '').replace(',', '.'));
@@ -324,7 +328,7 @@ Views.bovinosImport = function () {
           }
           loteId = lotesCache[k];
         }
-        DB.bovinos.add({
+        const campos = {
           brinco, nome: row.nome || '',
           categoria: row.categoria || 'Boi',
           sexo: (row.sexo || 'M').toUpperCase().startsWith('F') ? 'F' : 'M',
@@ -332,11 +336,28 @@ Views.bovinosImport = function () {
           dataEntrada: data,
           pesoEntrada: peso, precoArrobaEntrada: preco, custoEntrada: custo,
           observacoes: row.observacoes || '',
-        });
-        ok++;
+        };
+        let bovinoId = brincoIndex[brinco];
+        if (bovinoId) {
+          DB.bovinos.update(bovinoId, campos);
+          atualizados++;
+        } else {
+          const novo = DB.bovinos.add(campos);
+          bovinoId = novo.id;
+          brincoIndex[brinco] = bovinoId;
+          ok++;
+        }
+        const pesoAtual = parseFloat(String(row.pesoatual || '').replace(',', '.'));
+        if (pesoAtual && !isNaN(pesoAtual)) {
+          const jaTem = DB.pesagens.porBovino(bovinoId)
+            .some(p => p.data === U.todayISO() && p.pesoKg === pesoAtual);
+          if (!jaTem) {
+            DB.pesagens.add({ bovinoId, data: U.todayISO(), pesoKg: pesoAtual, observacoes: 'Importado via CSV' });
+          }
+        }
       });
       U.closeModal();
-      U.toast(`${ok} bovino(s) importado(s) (${skip} ignorado(s))`, 'success');
+      U.toast(`${ok} criado(s), ${atualizados} atualizado(s), ${skip} ignorado(s)`, 'success');
       App.render();
     });
   });

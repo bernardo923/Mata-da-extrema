@@ -156,6 +156,7 @@ Views.bovinos = function () {
         <span class="text-xs text-stone-500">${filtrados.length} bovino(s)</span>
       </div>
       <div class="flex gap-2">
+        <button class="btn btn-danger" id="bov-bulk-delete" style="display:none" onclick="Views.bovinosDeleteSelecionados()">Excluir selecionados</button>
         <button class="btn btn-secondary" onclick="Views.bovinosImport()">Importar CSV</button>
         <button class="btn btn-primary" onclick="Views.bovinoForm()">+ Novo bovino</button>
       </div>
@@ -165,6 +166,7 @@ Views.bovinos = function () {
       <table class="table">
         <thead>
           <tr>
+            <th style="width:2rem"><input type="checkbox" title="Selecionar todos" onchange="Views.bovinoToggleTodos(this)" /></th>
             <th>Brinco</th><th>Nome</th><th>Categoria</th><th>Lote</th>
             <th class="text-right">Peso entrada</th><th class="text-right">Peso atual</th>
             <th class="text-right">GMD</th><th class="text-right">Custo total</th>
@@ -179,6 +181,7 @@ Views.bovinos = function () {
             const lote = b.loteId ? (DB.lotes.get(b.loteId)?.nome || '—') : '—';
             return `
               <tr class="clickable" onclick="location.hash='#/bovinos/${b.id}'">
+                <td onclick="event.stopPropagation()"><input type="checkbox" class="bov-check" data-id="${b.id}" onchange="Views.bovinoToggleSelecao(this)" /></td>
                 <td class="font-mono font-medium">${U.esc(b.brinco)}</td>
                 <td>${U.esc(b.nome)}</td>
                 <td><span class="badge">${U.esc(b.categoria)}</span></td>
@@ -193,11 +196,42 @@ Views.bovinos = function () {
                 </td>
               </tr>
             `;
-          }).join('') || `<tr><td colspan="10" class="text-center text-stone-500 py-8">Nenhum bovino cadastrado</td></tr>`}
+          }).join('') || `<tr><td colspan="11" class="text-center text-stone-500 py-8">Nenhum bovino cadastrado</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+};
+
+// ----- Seleção múltipla de bovinos -----
+Views._bovinosSelecionados = function () {
+  return Array.from(document.querySelectorAll('.bov-check:checked')).map(c => c.dataset.id);
+};
+
+Views._bovinosAtualizarBarraSelecao = function () {
+  const n = Views._bovinosSelecionados().length;
+  const btn = document.getElementById('bov-bulk-delete');
+  if (!btn) return;
+  btn.style.display = n ? '' : 'none';
+  btn.textContent = `Excluir selecionados (${n})`;
+};
+
+Views.bovinoToggleSelecao = function () {
+  Views._bovinosAtualizarBarraSelecao();
+};
+
+Views.bovinoToggleTodos = function (el) {
+  document.querySelectorAll('.bov-check').forEach(c => { c.checked = el.checked; });
+  Views._bovinosAtualizarBarraSelecao();
+};
+
+Views.bovinosDeleteSelecionados = function () {
+  const ids = Views._bovinosSelecionados();
+  if (!ids.length) return;
+  if (!U.confirm(`Excluir ${ids.length} bovino(s) e todas as suas pesagens? Essa ação não pode ser desfeita.`)) return;
+  ids.forEach(id => DB.bovinos.remove(id));
+  U.toast(`${ids.length} bovino(s) excluído(s)`, 'success');
+  App.render();
 };
 
 Views.bovinoForm = function (id) {

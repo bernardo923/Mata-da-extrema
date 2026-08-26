@@ -42,14 +42,14 @@ Views.dashboard = function () {
   const valoresMes = meses.map(m => mensalMap[m]);
 
   return `
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="kpi-card"><div class="kpi-label">Cabeças ativas</div><div class="kpi-value">${totalCabecas}</div><div class="kpi-sub">${semLote > 0 ? `<a href="#/bovinos" onclick="sessionStorage.setItem('filtro_lote','__semlote__');sessionStorage.setItem('filtro_status','ativo');" class="text-amber-700 underline">${semLote} sem lote</a> · ${totalCabecas - semLote} em lotes` : 'No plantel'}</div></div>
       <div class="kpi-card"><div class="kpi-label">Peso total</div><div class="kpi-value">${U.num(pesoTotal, 0)} kg</div><div class="kpi-sub">${U.num(U.kgToArroba(pesoTotal), 1)} @ carcaça</div></div>
       <div class="kpi-card"><div class="kpi-label">Peso médio</div><div class="kpi-value">${U.num(pesoMedio, 0)} kg</div><div class="kpi-sub">${U.num(arrobaMedia, 2)} @ por cabeça</div></div>
       <div class="kpi-card"><div class="kpi-label">GMD médio</div><div class="kpi-value">${U.num(gmdMedio, 3)} kg/dia</div><div class="kpi-sub">Ganho médio diário</div></div>
     </div>
 
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="kpi-card"><div class="kpi-label">Tempo médio na fazenda</div><div class="kpi-value">${U.num(tempoMedio, 0)} dias</div><div class="kpi-sub">${U.num(tempoMedio / 30, 1)} meses</div></div>
       <div class="kpi-card"><div class="kpi-label">Unidades animais (UA)</div><div class="kpi-value">${U.num(ua, 1)}</div><div class="kpi-sub">1 UA = ${pesoUA} kg peso vivo</div></div>
       <div class="kpi-card">
@@ -60,7 +60,7 @@ Views.dashboard = function () {
       <div class="kpi-card"><div class="kpi-label">Lotes ativos</div><div class="kpi-value">${DB.lotes.list().length}</div><div class="kpi-sub">Agrupamento de manejo</div></div>
     </div>
 
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="kpi-card"><div class="kpi-label">Investido em gado</div><div class="kpi-value">${U.money(totalCompraGado)}</div></div>
       <div class="kpi-card"><div class="kpi-label">Custo operacional</div><div class="kpi-value text-money-neg">${U.money(totalCustoOperacional)}</div></div>
       <div class="kpi-card"><div class="kpi-label">Investimentos (CAPEX)</div><div class="kpi-value">${U.money(totalInvestimentos)}</div><div class="kpi-sub">Pasto / Sede / Curral / etc.</div></div>
@@ -162,7 +162,7 @@ Views.bovinos = function () {
       </div>
     </div>
 
-    <div class="card p-0 overflow-hidden">
+    <div class="card p-0 overflow-x-auto">
       <table class="table">
         <thead>
           <tr>
@@ -460,7 +460,7 @@ Views.bovinoDetail = function (id) {
       </div>
     </div>
 
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
       <div class="kpi-card"><div class="kpi-label">Peso atual</div><div class="kpi-value">${U.num(pesoAtual, 0)} kg</div><div class="kpi-sub">${U.num(arrobaAtual, 2)} @ carcaça</div></div>
       <div class="kpi-card"><div class="kpi-label">Ganho total</div><div class="kpi-value text-money-pos">+${U.num(ganhoTotal, 0)} kg</div><div class="kpi-sub">desde ${U.formatDate(b.dataEntrada)}</div></div>
       <div class="kpi-card"><div class="kpi-label">GMD geral</div><div class="kpi-value">${U.num(gmdGeral, 3)}</div><div class="kpi-sub">kg/dia</div></div>
@@ -1178,7 +1178,7 @@ Views.investimentos = function () {
       <div class="text-sm text-stone-500">${lista.length} lançamento(s) — total ${U.money(U.sum(lista, 'valor'))}</div>
       <button class="btn btn-primary" onclick="Views.investimentoForm()">+ Novo investimento</button>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${Object.entries(porCat).map(([cat, items]) => `
         <div class="kpi-card">
           <div class="kpi-label">${U.esc(cat)}</div>
@@ -1497,7 +1497,7 @@ Views.simulador = function () {
           const breakeven = totArrobas > 0 ? totCusto / totArrobas : 0;
 
           let html = '';
-          html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-3">';
+          html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">';
           html += '<div class="kpi-card"><div class="kpi-label">Receita estimada</div><div class="kpi-value text-money-pos">' + U.money(totReceita) + '</div><div class="kpi-sub">' + U.num(totArrobas, 1) + ' @ a ' + U.money(preco) + '</div></div>';
           html += '<div class="kpi-card"><div class="kpi-label">Custo total</div><div class="kpi-value text-money-neg">' + U.money(totCusto) + '</div><div class="kpi-sub">' + bovinos.length + ' cabeça(s)</div></div>';
           html += '<div class="kpi-card"><div class="kpi-label">Margem total</div><div class="kpi-value ' + (totMargem >= 0 ? 'text-money-pos' : 'text-money-neg') + '">' + U.money(totMargem) + '</div><div class="kpi-sub">ROI ' + U.num(roiMedio, 1) + '%</div></div>';
@@ -1505,6 +1505,7 @@ Views.simulador = function () {
           html += '</div>';
 
           html += '<div class="card p-0 mt-4"><div class="px-4 pt-4 card-title">Detalhe por bovino</div>';
+          html += '<div class="overflow-x-auto">';
           html += '<table class="table"><thead><tr><th>Brinco</th><th>Nome</th><th class="text-right">Peso atual</th>';
           if (dias > 0) html += '<th class="text-right">Peso projetado</th>';
           html += '<th class="text-right">@ a vender</th><th class="text-right">Receita</th><th class="text-right">Custo total</th><th class="text-right">Margem</th><th class="text-right">ROI</th></tr></thead><tbody>';
@@ -1521,7 +1522,7 @@ Views.simulador = function () {
             html += '<td class="text-right ' + (L.roi >= 0 ? 'text-money-pos' : 'text-money-neg') + '">' + U.num(L.roi, 1) + '%</td>';
             html += '</tr>';
           });
-          html += '</tbody></table></div>';
+          html += '</tbody></table></div></div>';
 
           document.getElementById('sim-result').innerHTML = html;
         };
@@ -1642,7 +1643,7 @@ Views.relatorios = function () {
     <div class="card mb-4">
       <div class="card-title">Margem por animal vendido</div>
       ${linhasMargem.length === 0 ? `<div class="text-stone-500 text-sm">Nenhuma venda registrada ainda.</div>` : `
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
           <div class="kpi-card"><div class="kpi-label">Animais vendidos</div><div class="kpi-value">${linhasMargem.length}</div></div>
           <div class="kpi-card"><div class="kpi-label">Margem total</div><div class="kpi-value ${margemTotal >= 0 ? 'text-money-pos' : 'text-money-neg'}">${U.money(margemTotal)}</div></div>
           <div class="kpi-card"><div class="kpi-label">Margem média/cabeça</div><div class="kpi-value ${margemMedia >= 0 ? 'text-money-pos' : 'text-money-neg'}">${U.money(margemMedia)}</div></div>

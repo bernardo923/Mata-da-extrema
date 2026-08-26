@@ -7,6 +7,7 @@ const Views = {};
 Views.dashboard = function () {
   const ativos = DB.bovinos.ativos();
   const totalCabecas = ativos.length;
+  const semLote = ativos.filter(b => !b.loteId || !DB.lotes.get(b.loteId)).length;
   const pesoTotal = U.sum(ativos, b => DB.pesagens.pesoAtual(b.id));
   const pesoMedio = totalCabecas ? pesoTotal / totalCabecas : 0;
   const arrobaMedia = U.kgToArroba(pesoMedio, DB.state.config.rendimentoCarcaca);
@@ -42,7 +43,7 @@ Views.dashboard = function () {
 
   return `
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      <div class="kpi-card"><div class="kpi-label">Cabeças ativas</div><div class="kpi-value">${totalCabecas}</div><div class="kpi-sub">No plantel</div></div>
+      <div class="kpi-card"><div class="kpi-label">Cabeças ativas</div><div class="kpi-value">${totalCabecas}</div><div class="kpi-sub">${semLote > 0 ? `<a href="#/bovinos" onclick="sessionStorage.setItem('filtro_lote','__semlote__');sessionStorage.setItem('filtro_status','ativo');" class="text-amber-700 underline">${semLote} sem lote</a> · ${totalCabecas - semLote} em lotes` : 'No plantel'}</div></div>
       <div class="kpi-card"><div class="kpi-label">Peso total</div><div class="kpi-value">${U.num(pesoTotal, 0)} kg</div><div class="kpi-sub">${U.num(U.kgToArroba(pesoTotal), 1)} @ carcaça</div></div>
       <div class="kpi-card"><div class="kpi-label">Peso médio</div><div class="kpi-value">${U.num(pesoMedio, 0)} kg</div><div class="kpi-sub">${U.num(arrobaMedia, 2)} @ por cabeça</div></div>
       <div class="kpi-card"><div class="kpi-label">GMD médio</div><div class="kpi-value">${U.num(gmdMedio, 3)} kg/dia</div><div class="kpi-sub">Ganho médio diário</div></div>
@@ -132,7 +133,9 @@ Views.bovinos = function () {
   const filtroStatus = sessionStorage.getItem('filtro_status') || 'ativo';
 
   const filtrados = lista.filter(b => {
-    if (filtroLote && b.loteId !== filtroLote) return false;
+    if (filtroLote === '__semlote__') {
+      if (b.loteId && DB.lotes.get(b.loteId)) return false;
+    } else if (filtroLote && b.loteId !== filtroLote) return false;
     if (filtroStatus && b.status !== filtroStatus) return false;
     return true;
   });
@@ -142,6 +145,7 @@ Views.bovinos = function () {
       <div class="flex items-center gap-2">
         <select class="select" style="width: auto" onchange="sessionStorage.setItem('filtro_lote', this.value); App.render();">
           <option value="">Todos os lotes</option>
+          <option value="__semlote__" ${filtroLote === '__semlote__' ? 'selected' : ''}>Sem lote</option>
           ${DB.lotes.list().map(l => `<option value="${l.id}" ${filtroLote === l.id ? 'selected' : ''}>${U.esc(l.nome)}</option>`).join('')}
         </select>
         <select class="select" style="width: auto" onchange="sessionStorage.setItem('filtro_status', this.value); App.render();">

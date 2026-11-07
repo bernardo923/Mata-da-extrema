@@ -1,0 +1,10 @@
+{
+  "name": "Campo — Mata da Extrema",
+  "short_name": "Campo",
+  "start_url": "/campo/",
+  "scope": "/campo/",
+  "display": "standalone",
+  "background_color": "#f5f5f4",
+  "theme_color": "#1c1917",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

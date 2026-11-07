@@ -6,6 +6,8 @@ const App = {
     'pesagens': { title: 'Pesagens', subtitle: 'Histórico de pesagens individuais e em lote' },
     'lotes': { title: 'Lotes', subtitle: 'Agrupamento para rateio e manejo' },
     'despesas': { title: 'Despesas operacionais', subtitle: 'OPEX com rateio por lote ou peso' },
+    'contas': { title: 'Contas a pagar', subtitle: 'Aprovação das contas lançadas pelo vaqueiro e vencimentos' },
+    'racao': { title: 'Ração & Estoque', subtitle: 'Entradas, consumo por lote e autonomia do estoque' },
     'investimentos': { title: 'Investimentos', subtitle: 'CAPEX — pasto, sede, curral, maquinário' },
     'vendas': { title: 'Vendas / Receitas', subtitle: 'Saídas para frigorífico e outras receitas' },
     'rateio': { title: 'Rateio & Custos', subtitle: 'Custo alocado por bovino' },
@@ -106,6 +108,13 @@ const App = {
       a.classList.toggle('active', a.dataset.route === route);
     });
 
+    const badge = document.getElementById('nav-contas-badge');
+    if (badge) {
+      const n = DB.contas.pendentes().length;
+      badge.textContent = n;
+      badge.classList.toggle('hidden', !n);
+    }
+
     const view = document.getElementById('view');
     let html = '';
     if (route === 'bovinos' && params[0]) {
@@ -131,6 +140,8 @@ const App = {
       pesagens: () => Views.pesagemForm(),
       lotes: () => Views.loteForm(),
       despesas: () => Views.despesaForm(),
+      contas: () => Views.contaForm(),
+      racao: () => Views.racaoForm('consumo'),
       investimentos: () => Views.investimentoForm(),
       vendas: () => Views.vendaForm(),
     };
@@ -143,6 +154,8 @@ const App = {
           <button class="btn btn-secondary" onclick="U.closeModal(); Views.investimentoForm();">Investimento</button>
           <button class="btn btn-secondary" onclick="U.closeModal(); Views.vendaForm();">Venda</button>
           <button class="btn btn-secondary" onclick="U.closeModal(); Views.loteForm();">Lote</button>
+          <button class="btn btn-secondary" onclick="U.closeModal(); Views.contaForm();">Conta a pagar</button>
+          <button class="btn btn-secondary" onclick="U.closeModal(); Views.racaoForm('consumo');">Consumo de ração</button>
         </div>
       `);
     });

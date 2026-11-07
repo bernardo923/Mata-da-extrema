@@ -10,7 +10,11 @@ const DB = {
     despesas: [],
     investimentos: [],
     vendas: [],
+    racaoEntradas: [],
+    racaoConsumos: [],
+    contasPagar: [],
     config: {
+      kgPorSaco: 40,
       nomeFazenda: 'Mata da Extrema',
       rendimentoCarcaca: 0.52,
       areaTotalHa: 0,
@@ -55,6 +59,12 @@ const DB = {
     });
     if (!r.ok) throw new Error('Senha incorreta');
     const j = await r.json();
+    if (j.role === 'vaqueiro') {
+      // senha do vaqueiro abre só a tela de campo
+      localStorage.setItem('campo_token', j.token);
+      location.href = '/campo/';
+      return j;
+    }
     this.setToken(j.token, !!persist);
     return j;
   },
@@ -85,8 +95,66 @@ const DB = {
         config: { ...this.state.config, ...(j.data.config || {}) },
       };
     }
+    ['racaoEntradas', 'racaoConsumos', 'contasPagar'].forEach(k => {
+      if (!Array.isArray(this.state[k])) this.state[k] = [];
+    });
     this._lastSyncStatus = 'ok';
     this._updateSyncIndicator();
+    await this.incorporarCampo();
+  },
+
+  // Traz para o estado os lançamentos feitos na tela do vaqueiro (/campo).
+  // Idempotente: usa o id do lançamento como id do registro; se já existe, pula.
+  async incorporarCampo() {
+    let lancs = [];
+    try {
+      const r = await this._fetch('/api/campo/pendentes');
+      if (!r.ok) return 0;
+      lancs = (await r.json()).lancamentos || [];
+    } catch (e) {
+      console.warn('[campo] não foi possível buscar pendentes', e);
+      return 0;
+    }
+    if (!lancs.length) return 0;
+    const st = this.state;
+    const existe = (arr, id) => arr.some(x => x.id === id);
+    let n = 0;
+    lancs.sort((a, b) => String(a.criado_em).localeCompare(String(b.criado_em))).forEach(l => {
+      const p = l.payload || {};
+      const base = { id: l.id, origem: 'campo', lancadoEm: l.criado_em };
+      if (l.tipo === 'pesagem' && !existe(st.pesagens, l.id)) {
+        st.pesagens.push({ ...base, bovinoId: p.bovinoId, data: p.data, pesoKg: p.pesoKg, observacoes: p.observacoes || '' });
+        n++;
+      } else if (l.tipo === 'consumo' && !existe(st.racaoConsumos, l.id)) {
+        st.racaoConsumos.push({ ...base, data: p.data, loteId: p.loteId || null, tipo: p.tipoRacao, kg: p.kg, observacoes: p.observacoes || '' });
+        n++;
+      } else if (l.tipo === 'entradaRacao' && !existe(st.racaoEntradas, l.id)) {
+        st.racaoEntradas.push({ ...base, data: p.data, tipo: p.tipoRacao, kg: p.kg, fornecedor: p.fornecedor || '', observacoes: p.observacoes || '' });
+        n++;
+      } else if (l.tipo === 'conta' && !existe(st.contasPagar, l.id)) {
+        st.contasPagar.push({
+          ...base, fornecedor: p.fornecedor, descricao: p.descricao || '', valor: p.valor,
+          vencimento: p.vencimento, status: 'pendente', temAnexo: !!l.tem_anexo,
+          despesaId: null, dataPagamento: null,
+        });
+        n++;
+      }
+    });
+    // salva o estado ANTES de marcar como incorporado; se falhar, na próxima carga tenta de novo sem duplicar
+    clearTimeout(this._saveTimer);
+    await this._sync();
+    if (this._lastSyncStatus !== 'ok') return 0;
+    try {
+      await this._fetch('/api/campo/ack', { method: 'POST', body: JSON.stringify({ ids: lancs.map(l => l.id) }) });
+    } catch (e) { console.warn('[campo] ack falhou', e); }
+    if (n && typeof U !== 'undefined') setTimeout(() => U.toast(`${n} lançamento(s) do campo incorporados`, 'success'), 300);
+    return n;
+  },
+
+  async anexoCampo(id) {
+    const r = await this._fetch('/api/campo/anexo/' + encodeURIComponent(id));
+    if (!r.ok) throw new Error('sem anexo');
+    return (await r.json()).anexo;
   },
 
   // Debounced save: agrupa mutações em rajadas curtas em uma chamada de rede
@@ -137,7 +205,8 @@ const DB = {
   reset() {
     this.state = {
       bovinos: [], lotes: [], pesagens: [], despesas: [], investimentos: [], vendas: [],
-      config: { nomeFazenda: 'Mata da Extrema', rendimentoCarcaca: 0.52, areaTotalHa: 0, areaPastoHa: 0, pesoUA: 450 },
+      racaoEntradas: [], racaoConsumos: [], contasPagar: [],
+      config: { nomeFazenda: 'Mata da Extrema', rendimentoCarcaca: 0.52, areaTotalHa: 0, areaPastoHa: 0, pesoUA: 450, kgPorSaco: 40 },
     };
     this.save();
   },
@@ -380,6 +449,76 @@ const DB = {
       DB.state.vendas = DB.state.vendas.filter(x => x.id !== id);
       DB.save();
     },
+  },
+
+  // ===== RAÇÃO (estoque e consumo) =====
+  racao: {
+    entradas() { return DB.state.racaoEntradas; },
+    consumos() { return DB.state.racaoConsumos; },
+    addEntrada(e) {
+      const novo = { id: U.uid(), data: U.todayISO(), tipo: '', kg: 0, fornecedor: '', observacoes: '', ...e };
+      DB.state.racaoEntradas.push(novo);
+      DB.save();
+      return novo;
+    },
+    addConsumo(c) {
+      const novo = { id: U.uid(), data: U.todayISO(), loteId: null, tipo: '', kg: 0, observacoes: '', ...c };
+      DB.state.racaoConsumos.push(novo);
+      DB.save();
+      return novo;
+    },
+    remove(id) {
+      DB.state.racaoEntradas = DB.state.racaoEntradas.filter(x => x.id !== id);
+      DB.state.racaoConsumos = DB.state.racaoConsumos.filter(x => x.id !== id);
+      DB.save();
+    },
+    tipos() {
+      const s = new Set();
+      DB.state.racaoEntradas.forEach(e => e.tipo && s.add(e.tipo));
+      DB.state.racaoConsumos.forEach(c => c.tipo && s.add(c.tipo));
+      return [...s].sort((a, b) => a.localeCompare(b));
+    },
+    // [{tipo, entradas, consumo, saldo, consumoDia (média 7d), dias}]
+    estoque() {
+      const seteDias = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      return this.tipos().map(tipo => {
+        const ent = U.sum(DB.state.racaoEntradas.filter(e => e.tipo === tipo), 'kg');
+        const cons = DB.state.racaoConsumos.filter(c => c.tipo === tipo);
+        const consTotal = U.sum(cons, 'kg');
+        const cons7 = U.sum(cons.filter(c => c.data > seteDias), 'kg');
+        const consumoDia = cons7 / 7;
+        const saldo = ent - consTotal;
+        return { tipo, entradas: ent, consumo: consTotal, saldo, consumoDia, dias: consumoDia > 0 ? saldo / consumoDia : null };
+      });
+    },
+  },
+
+  // ===== CONTAS A PAGAR =====
+  contas: {
+    list() { return DB.state.contasPagar; },
+    get(id) { return DB.state.contasPagar.find(c => c.id === id); },
+    add(c) {
+      const novo = {
+        id: U.uid(), fornecedor: '', descricao: '', valor: 0, vencimento: U.todayISO(),
+        status: 'pendente', temAnexo: false, despesaId: null, dataPagamento: null, origem: 'erp', ...c,
+      };
+      DB.state.contasPagar.push(novo);
+      DB.save();
+      return novo;
+    },
+    update(id, patch) {
+      const i = DB.state.contasPagar.findIndex(c => c.id === id);
+      if (i < 0) return;
+      DB.state.contasPagar[i] = { ...DB.state.contasPagar[i], ...patch };
+      DB.save();
+    },
+    remove(id) {
+      DB.state.contasPagar = DB.state.contasPagar.filter(c => c.id !== id);
+      DB.save();
+    },
+    pendentes() { return DB.state.contasPagar.filter(c => c.status === 'pendente'); },
+    // aprovadas e ainda não pagas
+    aPagar() { return DB.state.contasPagar.filter(c => c.status === 'aprovada'); },
   },
 
   // ===== RATEIO ENGINE =====

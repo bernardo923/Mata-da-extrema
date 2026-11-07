@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1c1917" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Campo" />
+  <title>Campo — Mata da Extrema</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="campo.css" />
+</head>
+<body>
+  <header class="topo">
+    <button id="btn-voltar" class="voltar" hidden aria-label="Voltar">‹</button>
+    <div class="topo-titulo">
+      <div class="topo-sub" id="topo-fazenda">Fazenda</div>
+      <div class="topo-nome" id="topo-tela">Lançamentos</div>
+    </div>
+    <div id="status" class="status">…</div>
+  </header>
+
+  <main id="tela"></main>
+
+  <div id="aviso" class="aviso" hidden></div>
+
+  <script src="campo.js"></script>
+</body>
+</html>

@@ -41,7 +41,17 @@ Views.dashboard = function () {
   const meses = Object.keys(mensalMap).sort();
   const valoresMes = meses.map(m => mensalMap[m]);
 
+  const contasPend = DB.contas.pendentes();
+  const contasVencidas = DB.contas.aPagar().filter(c => c.vencimento < hoje);
+  const racaoAcabando = DB.racao.estoque().filter(e => e.saldo <= 0 ? e.entradas > 0 : (e.dias !== null && e.dias <= 7));
+  const alertas = [
+    contasPend.length ? `<a href="#/contas" onclick="sessionStorage.setItem('filtro_contas','pendentes')" class="underline">${contasPend.length} conta(s) aguardando aprovação (${U.money(U.sum(contasPend, 'valor'))})</a>` : '',
+    contasVencidas.length ? `<a href="#/contas" onclick="sessionStorage.setItem('filtro_contas','apagar')" class="underline text-red-700">${contasVencidas.length} conta(s) vencida(s)</a>` : '',
+    ...racaoAcabando.map(e => `<a href="#/racao" class="underline">${U.esc(e.tipo)}: ${e.saldo <= 0 ? 'sem estoque' : 'estoque para ~' + U.num(e.dias, 0) + ' dias'}</a>`),
+  ].filter(Boolean);
+
   return `
+    ${alertas.length ? `<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex flex-wrap gap-x-5 gap-y-1"><b>Atenção:</b>${alertas.join('')}</div>` : ''}
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="kpi-card"><div class="kpi-label">Cabeças ativas</div><div class="kpi-value">${totalCabecas}</div><div class="kpi-sub">${semLote > 0 ? `<a href="#/bovinos" onclick="sessionStorage.setItem('filtro_lote','__semlote__');sessionStorage.setItem('filtro_status','ativo');" class="text-amber-700 underline">${semLote} sem lote</a> · ${totalCabecas - semLote} em lotes` : 'No plantel'}</div></div>
       <div class="kpi-card"><div class="kpi-label">Peso total</div><div class="kpi-value">${U.num(pesoTotal, 0)} kg</div><div class="kpi-sub">${U.num(U.kgToArroba(pesoTotal), 1)} @ carcaça</div></div>
@@ -580,7 +590,7 @@ Views.pesagens = function () {
                 <td class="text-stone-500">${U.esc(lote || '—')}</td>
                 <td class="text-right">${U.num(p.pesoKg, 0)}</td>
                 <td class="text-right">${U.num(U.kgToArroba(p.pesoKg), 2)}</td>
-                <td>${U.esc(p.observacoes || '')}</td>
+                <td>${p.origem === 'campo' ? '<span class="badge badge-blue">vaqueiro</span> ' : ''}${U.esc(p.observacoes || '')}</td>
                 <td><button class="btn btn-icon" onclick="Views.pesagemDelete('${p.id}')">×</button></td>
               </tr>
             `;
@@ -1770,4 +1780,347 @@ Views.dados = function () {
       </div>
     </div>
   `;
+};
+
+// ===========================================================================
+// CONTAS A PAGAR (lançadas pelo vaqueiro em /campo ou aqui no ERP)
+// ===========================================================================
+Views._contaStatus = function (c) {
+  const hoje = U.todayISO();
+  if (c.status === 'pendente') return '<span class="badge badge-amber">Aguardando aprovação</span>';
+  if (c.status === 'rejeitada') return '<span class="badge badge-stone">Rejeitada</span>';
+  if (c.status === 'paga') return `<span class="badge badge-green">Paga ${U.formatDate(c.dataPagamento)}</span>`;
+  if (c.vencimento < hoje) return '<span class="badge badge-red">Vencida</span>';
+  return '<span class="badge badge-blue">A pagar</span>';
+};
+
+Views.contas = function () {
+  const filtro = sessionStorage.getItem('filtro_contas') || 'abertas';
+  const hoje = U.todayISO();
+  const todas = DB.contas.list();
+  const pend = DB.contas.pendentes();
+  const aPagar = DB.contas.aPagar();
+  const vencidas = aPagar.filter(c => c.vencimento < hoje);
+  const em7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const semana = aPagar.filter(c => c.vencimento >= hoje && c.vencimento <= em7);
+
+  const filtros = {
+    abertas: c => c.status === 'pendente' || c.status === 'aprovada',
+    pendentes: c => c.status === 'pendente',
+    apagar: c => c.status === 'aprovada',
+    pagas: c => c.status === 'paga',
+    todas: () => true,
+  };
+  const lista = todas.filter(filtros[filtro] || filtros.abertas)
+    .sort((a, b) => (a.status === 'pendente' ? 0 : 1) - (b.status === 'pendente' ? 0 : 1) || a.vencimento.localeCompare(b.vencimento));
+
+  const btnFiltro = (id, label) =>
+    `<button class="btn btn-sm ${filtro === id ? 'btn-primary' : 'btn-secondary'}" onclick="sessionStorage.setItem('filtro_contas','${id}');App.render()">${label}</button>`;
+
+  return `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="kpi-card"><div class="kpi-label">Aguardando aprovação</div><div class="kpi-value">${pend.length}</div><div class="kpi-sub">${U.money(U.sum(pend, 'valor'))}</div></div>
+      <div class="kpi-card"><div class="kpi-label">A pagar</div><div class="kpi-value">${U.money(U.sum(aPagar, 'valor'))}</div><div class="kpi-sub">${aPagar.length} conta(s) aprovada(s)</div></div>
+      <div class="kpi-card"><div class="kpi-label">Vencendo em 7 dias</div><div class="kpi-value">${U.money(U.sum(semana, 'valor'))}</div><div class="kpi-sub">${semana.length} conta(s)</div></div>
+      <div class="kpi-card"><div class="kpi-label">Vencidas</div><div class="kpi-value ${vencidas.length ? 'text-money-neg' : ''}">${U.money(U.sum(vencidas, 'valor'))}</div><div class="kpi-sub">${vencidas.length} conta(s)</div></div>
+    </div>
+    <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
+      <div class="flex gap-2 flex-wrap">
+        ${btnFiltro('abertas', 'Em aberto')}${btnFiltro('pendentes', 'Aguardando aprovação')}${btnFiltro('apagar', 'A pagar')}${btnFiltro('pagas', 'Pagas')}${btnFiltro('todas', 'Todas')}
+      </div>
+      <button class="btn btn-primary" onclick="Views.contaForm()">+ Nova conta</button>
+    </div>
+    <div class="card p-0">
+      <table class="table">
+        <thead><tr><th>Vencimento</th><th>Fornecedor</th><th>Descrição</th><th>Origem</th><th>Status</th><th class="text-right">Valor</th><th></th></tr></thead>
+        <tbody>
+          ${lista.map(c => `
+            <tr>
+              <td class="${c.status === 'aprovada' && c.vencimento < hoje ? 'text-red-700 font-semibold' : ''}">${U.formatDate(c.vencimento)}</td>
+              <td>${U.esc(c.fornecedor)}</td>
+              <td class="text-stone-500">${U.esc(c.descricao || '')}${c.temAnexo ? ` <button class="btn btn-icon" title="Ver foto" onclick="Views.contaAnexo('${c.id}')">📷</button>` : ''}</td>
+              <td class="text-xs text-stone-500">${c.origem === 'campo' ? 'Vaqueiro' : 'ERP'}</td>
+              <td>${Views._contaStatus(c)}</td>
+              <td class="text-right">${U.money(c.valor)}</td>
+              <td class="whitespace-nowrap text-right">
+                ${c.status === 'pendente' ? `
+                  <button class="btn btn-sm btn-primary" onclick="Views.contaAprovar('${c.id}')">Aprovar</button>
+                  <button class="btn btn-sm btn-secondary" onclick="Views.contaRejeitar('${c.id}')">Rejeitar</button>` : ''}
+                ${c.status === 'aprovada' ? `<button class="btn btn-sm btn-primary" onclick="Views.contaPagar('${c.id}')">Marcar paga</button>` : ''}
+                ${c.despesaId ? `<a class="btn btn-sm btn-secondary" href="#/despesas" onclick="setTimeout(()=>Views.despesaForm('${c.despesaId}'),50)">Despesa</a>` : ''}
+                ${c.status !== 'pendente' && !c.despesaId ? `<button class="btn btn-icon" title="Excluir" onclick="Views.contaDelete('${c.id}')">×</button>` : ''}
+                ${c.status === 'pendente' ? `<button class="btn btn-icon" title="Editar" onclick="Views.contaForm('${c.id}')">✎</button>` : ''}
+              </td>
+            </tr>`).join('') || `<tr><td colspan="7" class="text-center text-stone-500 py-8">Nenhuma conta neste filtro</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-stone-500 mt-3">Contas lançadas pelo vaqueiro chegam como <b>Aguardando aprovação</b>. Ao aprovar, a conta vira uma despesa operacional (entra no rateio) e fica <b>A pagar</b> até ser marcada como paga.</p>
+  `;
+};
+
+Views.contaForm = function (id) {
+  const c = id ? DB.contas.get(id) : null;
+  U.modal(c ? 'Editar conta' : 'Nova conta a pagar', `
+    <form id="form-conta" class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="field-label">Fornecedor *</label><input class="input" name="fornecedor" value="${U.esc(c?.fornecedor || '')}" required /></div>
+      <div><label class="field-label">Valor (R$) *</label><input class="input" name="valor" type="number" step="0.01" value="${c?.valor || ''}" required /></div>
+      <div><label class="field-label">Vencimento *</label><input class="input" name="vencimento" type="date" value="${c?.vencimento || U.todayISO()}" required /></div>
+      <div class="col-span-2"><label class="field-label">Descrição</label><textarea class="textarea" name="descricao" rows="2">${U.esc(c?.descricao || '')}</textarea></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200 mt-2">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-conta').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      fd.valor = parseFloat(fd.valor) || 0;
+      if (c) DB.contas.update(id, fd);
+      else DB.contas.add(fd);
+      U.closeModal();
+      U.toast('Conta salva', 'success');
+      App.render();
+    });
+  });
+};
+
+// Aprovar = criar a despesa operacional (com rateio) e deixar a conta "a pagar"
+Views.contaAprovar = function (id) {
+  const c = DB.contas.get(id);
+  if (!c) return;
+  const lotes = DB.lotes.list();
+  const texto = `${c.fornecedor} ${c.descricao}`.toLowerCase();
+  const catSugerida = CATEGORIAS_DESPESA.find(cat => cat !== 'Outros' && texto.includes(cat.toLowerCase().slice(0, 5))) || 'Outros';
+  U.modal('Aprovar conta', `
+    <div class="mb-4 text-sm bg-stone-50 border border-stone-200 rounded p-3">
+      <div class="font-semibold">${U.esc(c.fornecedor)} — ${U.money(c.valor)}</div>
+      <div class="text-stone-500">Vence ${U.formatDate(c.vencimento)}${c.descricao ? ' · ' + U.esc(c.descricao) : ''}</div>
+      ${c.temAnexo ? `<button type="button" class="btn btn-sm btn-secondary mt-2" onclick="Views.contaAnexo('${c.id}', true)">📷 Ver foto</button><div id="anexo-inline" class="mt-2"></div>` : ''}
+    </div>
+    <form id="form-aprovar" class="grid grid-cols-2 gap-3">
+      <div><label class="field-label">Valor (R$)</label><input class="input" name="valor" type="number" step="0.01" value="${c.valor}" required /></div>
+      <div><label class="field-label">Data da despesa</label><input class="input" name="data" type="date" value="${c.vencimento}" required /></div>
+      <div><label class="field-label">Categoria</label>
+        <select class="select" name="categoria">${CATEGORIAS_DESPESA.map(x => `<option ${x === catSugerida ? 'selected' : ''}>${x}</option>`).join('')}</select>
+      </div>
+      <div><label class="field-label">Rateio</label>
+        <select class="select" name="rateioTipo">
+          <option value="peso">Proporcional ao peso</option>
+          <option value="igual">Igual por cabeça</option>
+        </select>
+      </div>
+      <div><label class="field-label">Escopo</label>
+        <select class="select" name="rateioEscopo" id="ap-escopo">
+          <option value="todos">Todos os ativos</option>
+          ${lotes.length ? '<option value="lote">Um lote</option>' : ''}
+        </select>
+      </div>
+      <div id="ap-lote-wrap" class="hidden"><label class="field-label">Lote</label>
+        <select class="select" name="loteId">${lotes.map(l => `<option value="${l.id}">${U.esc(l.nome)}</option>`).join('')}</select>
+      </div>
+      <div class="col-span-2"><label class="flex items-center gap-2 text-sm"><input type="checkbox" name="jaPaga" /> Já está paga</label></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200 mt-2">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Aprovar e lançar despesa</button>
+      </div>
+    </form>
+  `, body => {
+    const escopo = body.querySelector('#ap-escopo');
+    escopo.addEventListener('change', () => body.querySelector('#ap-lote-wrap').classList.toggle('hidden', escopo.value !== 'lote'));
+    body.querySelector('#form-aprovar').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      const valor = parseFloat(fd.valor) || 0;
+      const despesa = DB.despesas.add({
+        data: fd.data,
+        fornecedor: c.fornecedor,
+        categoria: fd.categoria,
+        valor,
+        rateioTipo: fd.rateioTipo,
+        rateioEscopo: fd.rateioEscopo,
+        loteId: fd.rateioEscopo === 'lote' ? fd.loteId : null,
+        observacoes: [c.descricao, c.origem === 'campo' ? '(lançado pelo vaqueiro)' : ''].filter(Boolean).join(' '),
+        contaId: c.id,
+      });
+      DB.contas.update(c.id, {
+        valor,
+        status: fd.jaPaga ? 'paga' : 'aprovada',
+        dataPagamento: fd.jaPaga ? U.todayISO() : null,
+        despesaId: despesa.id,
+      });
+      U.closeModal();
+      U.toast('Conta aprovada e lançada em despesas', 'success');
+      App.render();
+    });
+  });
+};
+
+Views.contaPagar = function (id) {
+  const c = DB.contas.get(id);
+  if (!c) return;
+  U.modal('Marcar como paga', `
+    <form id="form-pagar" class="space-y-3">
+      <div class="text-sm">${U.esc(c.fornecedor)} — <b>${U.money(c.valor)}</b> (vence ${U.formatDate(c.vencimento)})</div>
+      <div><label class="field-label">Data do pagamento</label><input class="input" name="dataPagamento" type="date" value="${U.todayISO()}" required /></div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-stone-200">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Confirmar pagamento</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-pagar').addEventListener('submit', e => {
+      e.preventDefault();
+      DB.contas.update(id, { status: 'paga', dataPagamento: new FormData(e.target).get('dataPagamento') });
+      U.closeModal();
+      U.toast('Conta paga', 'success');
+      App.render();
+    });
+  });
+};
+
+Views.contaRejeitar = function (id) {
+  if (!U.confirm('Rejeitar esta conta? Ela não vira despesa.')) return;
+  DB.contas.update(id, { status: 'rejeitada' });
+  U.toast('Conta rejeitada');
+  App.render();
+};
+
+Views.contaDelete = function (id) {
+  if (!U.confirm('Excluir esta conta?')) return;
+  DB.contas.remove(id);
+  U.toast('Conta excluída');
+  App.render();
+};
+
+Views.contaAnexo = async function (id, inline) {
+  try {
+    const src = await DB.anexoCampo(id);
+    const img = `<img src="${src}" alt="Foto do boleto/nota" class="w-full rounded border border-stone-200" />`;
+    const alvo = inline && document.getElementById('anexo-inline');
+    if (alvo) alvo.innerHTML = img;
+    else U.modal('Foto do boleto / nota', img + `<div class="mt-3 text-right"><a class="btn btn-secondary" href="${src}" download="boleto-${id}.jpg">Baixar</a></div>`);
+  } catch (e) {
+    U.toast('Foto não encontrada', 'error');
+  }
+};
+
+// ===========================================================================
+// RAÇÃO & ESTOQUE
+// ===========================================================================
+Views.racao = function () {
+  const est = DB.racao.estoque();
+  const lotes = DB.lotes.list();
+  const trintaDias = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const consumos30 = DB.racao.consumos().filter(c => c.data > trintaDias);
+
+  // consumo por lote nos últimos 30 dias (kg/cab/dia usando cabeças atuais do lote)
+  const porLote = U.groupBy(consumos30, c => c.loteId || '__todos__');
+  const linhasLote = Object.entries(porLote).map(([loteId, cs]) => {
+    const lote = loteId === '__todos__' ? null : DB.lotes.get(loteId);
+    const cab = lote ? DB.bovinos.porLote(loteId).length : DB.bovinos.ativos().length;
+    const kg = U.sum(cs, 'kg');
+    const dias = new Set(cs.map(c => c.data)).size;
+    return { nome: lote ? lote.nome : 'Todos os lotes', cab, kg, dias, kgCabDia: cab && dias ? kg / cab / dias : null };
+  }).sort((a, b) => b.kg - a.kg);
+
+  const movs = [
+    ...DB.racao.entradas().map(e => ({ ...e, mov: 'entrada' })),
+    ...DB.racao.consumos().map(c => ({ ...c, mov: 'consumo' })),
+  ].sort((a, b) => b.data.localeCompare(a.data) || String(b.lancadoEm || '').localeCompare(String(a.lancadoEm || ''))).slice(0, 200);
+
+  return `
+    <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
+      <div class="text-sm text-stone-500">Estoque = entradas − consumos lançados. Autonomia pela média dos últimos 7 dias.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary" onclick="Views.racaoForm('entrada')">+ Entrada de ração</button>
+        <button class="btn btn-primary" onclick="Views.racaoForm('consumo')">+ Consumo</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${est.map(e => {
+        const alerta = e.saldo < 0 ? 'text-money-neg' : (e.dias !== null && e.dias <= 7 ? 'text-amber-700' : '');
+        return `<div class="kpi-card">
+          <div class="kpi-label">${U.esc(e.tipo)}</div>
+          <div class="kpi-value ${alerta}">${U.num(e.saldo, 0)} kg</div>
+          <div class="kpi-sub">${e.consumoDia > 0 ? `${U.num(e.consumoDia, 0)} kg/dia · ${e.saldo > 0 ? '~' + U.num(e.dias, 0) + ' dias' : 'sem estoque'}` : 'sem consumo nos últimos 7 dias'}</div>
+        </div>`;
+      }).join('') || '<div class="kpi-card col-span-2 lg:col-span-4 text-sm text-stone-500">Nenhuma ração lançada ainda. O vaqueiro lança entradas e consumo pela tela de campo (<a class="underline" href="/campo/" target="_blank">/campo</a>).</div>'}
+    </div>
+
+    <div class="card p-0 mb-6">
+      <div class="px-5 pt-4 card-title">Consumo por lote — últimos 30 dias</div>
+      <table class="table">
+        <thead><tr><th>Lote</th><th class="text-right">Cabeças</th><th class="text-right">Dias com trato</th><th class="text-right">Total (kg)</th><th class="text-right">kg/cab/dia</th></tr></thead>
+        <tbody>
+          ${linhasLote.map(l => `<tr><td>${U.esc(l.nome)}</td><td class="text-right">${l.cab}</td><td class="text-right">${l.dias}</td><td class="text-right">${U.num(l.kg, 0)}</td><td class="text-right">${l.kgCabDia !== null ? U.num(l.kgCabDia, 2) : '—'}</td></tr>`).join('')
+            || '<tr><td colspan="5" class="text-center text-stone-500 py-6">Sem consumo nos últimos 30 dias</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card p-0">
+      <div class="px-5 pt-4 card-title">Movimentações</div>
+      <table class="table">
+        <thead><tr><th>Data</th><th>Tipo</th><th>Ração</th><th>Lote / Fornecedor</th><th class="text-right">kg</th><th>Origem</th><th>Obs.</th><th></th></tr></thead>
+        <tbody>
+          ${movs.map(m => `<tr>
+            <td>${U.formatDate(m.data)}</td>
+            <td>${m.mov === 'entrada' ? '<span class="badge badge-green">Entrada</span>' : '<span class="badge badge-amber">Consumo</span>'}</td>
+            <td>${U.esc(m.tipo)}</td>
+            <td class="text-stone-500">${m.mov === 'entrada' ? U.esc(m.fornecedor || '—') : U.esc(m.loteId ? (DB.lotes.get(m.loteId)?.nome || '?') : 'Todos')}</td>
+            <td class="text-right ${m.mov === 'consumo' ? 'text-money-neg' : 'text-money-pos'}">${m.mov === 'consumo' ? '−' : '+'}${U.num(m.kg, 0)}</td>
+            <td class="text-xs text-stone-500">${m.origem === 'campo' ? 'Vaqueiro' : 'ERP'}</td>
+            <td class="text-stone-500">${U.esc(m.observacoes || '')}</td>
+            <td><button class="btn btn-icon" onclick="Views.racaoDelete('${m.id}')">×</button></td>
+          </tr>`).join('') || '<tr><td colspan="8" class="text-center text-stone-500 py-6">Nenhuma movimentação</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+};
+
+Views.racaoForm = function (mov) {
+  const entrada = mov === 'entrada';
+  const tipos = DB.racao.tipos();
+  const lotes = DB.lotes.list();
+  U.modal(entrada ? 'Entrada de ração' : 'Consumo de ração', `
+    <form id="form-racao" class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="field-label">Ração *</label>
+        <input class="input" name="tipo" list="racao-tipos" required />
+        <datalist id="racao-tipos">${tipos.map(t => `<option value="${U.esc(t)}"></option>`).join('')}</datalist>
+      </div>
+      <div><label class="field-label">Quantidade (kg) *</label><input class="input" name="kg" type="number" step="0.1" required /></div>
+      <div><label class="field-label">Data *</label><input class="input" name="data" type="date" value="${U.todayISO()}" required /></div>
+      ${entrada
+        ? `<div class="col-span-2"><label class="field-label">Fornecedor</label><input class="input" name="fornecedor" /></div>`
+        : `<div class="col-span-2"><label class="field-label">Lote</label><select class="select" name="loteId"><option value="">Todos os lotes</option>${lotes.map(l => `<option value="${l.id}">${U.esc(l.nome)}</option>`).join('')}</select></div>`}
+      <div class="col-span-2"><label class="field-label">Observações</label><textarea class="textarea" name="observacoes" rows="2"></textarea></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200 mt-2">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-racao').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      fd.kg = parseFloat(fd.kg) || 0;
+      fd.tipo = fd.tipo.trim();
+      if (entrada) DB.racao.addEntrada(fd);
+      else DB.racao.addConsumo({ ...fd, loteId: fd.loteId || null });
+      U.closeModal();
+      U.toast('Lançamento salvo', 'success');
+      App.render();
+    });
+  });
+};
+
+Views.racaoDelete = function (id) {
+  if (!U.confirm('Excluir esta movimentação de ração?')) return;
+  DB.racao.remove(id);
+  U.toast('Movimentação excluída');
+  App.render();
 };

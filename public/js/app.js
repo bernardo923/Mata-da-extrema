@@ -10,6 +10,7 @@ const App = {
     'racao': { title: 'Ração & Estoque', subtitle: 'Entradas, consumo por lote e autonomia do estoque' },
     'investimentos': { title: 'Investimentos', subtitle: 'CAPEX — pasto, sede, curral, maquinário' },
     'vendas': { title: 'Vendas / Receitas', subtitle: 'Saídas para frigorífico e outras receitas' },
+    'dre': { title: 'DRE', subtitle: 'Demonstração de resultado e investimentos do período' },
     'rateio': { title: 'Rateio & Custos', subtitle: 'Custo alocado por bovino' },
     'simulador': { title: 'Simulador de venda', subtitle: 'Projete margem e lucro antes de vender' },
     'relatorios': { title: 'Relatórios', subtitle: 'DRE, indicadores zootécnicos e financeiros' },

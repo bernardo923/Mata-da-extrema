@@ -2124,3 +2124,204 @@ Views.racaoDelete = function (id) {
   U.toast('Movimentação excluída');
   App.render();
 };
+
+// ===========================================================================
+// DRE DA FAZENDA
+// ===========================================================================
+Views._dre = { ano: null, lote: 'todos', colunas: 'meses' };
+
+Views.dreSet = function (k, v) { Views._dre[k] = v; App.render(); };
+
+// Distribui uma despesa entre lotes: { loteId|'sem': valor }
+Views._dreDespesaPorLote = function (d) {
+  if (d.rateioEscopo === 'lote' && d.loteId) return { [d.loteId]: d.valor || 0 };
+  const out = {}; let alocado = 0;
+  const r = DB.rateio.calcular(d);
+  Object.entries(r).forEach(([bid, v]) => {
+    const k = DB.bovinos.get(bid)?.loteId || 'sem';
+    out[k] = (out[k] || 0) + v; alocado += v;
+  });
+  const resto = (d.valor || 0) - alocado;
+  if (Math.abs(resto) > 0.005) out.sem = (out.sem || 0) + resto;
+  return out;
+};
+
+Views.dre = function () {
+  const st = Views._dre;
+  const anos = new Set([new Date().getFullYear()]);
+  [...DB.despesas.list(), ...DB.vendas.list(), ...DB.investimentos.list()].forEach(x => x.data && anos.add(+x.data.slice(0, 4)));
+  DB.bovinos.list().forEach(b => { b.dataEntrada && anos.add(+b.dataEntrada.slice(0, 4)); b.dataSaida && anos.add(+b.dataSaida.slice(0, 4)); });
+  const listaAnos = [...anos].sort((a, b) => b - a);
+  if (!st.ano || !anos.has(st.ano)) st.ano = listaAnos.find(a => DB.despesas.list().some(d => d.data?.startsWith(String(a)))) || listaAnos[0];
+  const ano = String(st.ano);
+  const lotes = DB.lotes.list();
+  const nomeLote = id => id === 'sem' ? 'Sem lote' : (lotes.find(l => l.id === id)?.nome || '—');
+  const rotLote = l => /^lote/i.test(l.nome) ? l.nome : 'Lote ' + l.nome;
+  const porLotes = st.colunas === 'lotes';
+  const filtroLote = porLotes ? 'todos' : st.lote;
+  const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const noAno = iso => iso && iso.startsWith(ano);
+
+  // linhas: { chave: { colKey: valor } }
+  const L = {};
+  const add = (linha, data, loteId, v) => {
+    if (!v || !noAno(data)) return;
+    if (filtroLote !== 'todos' && loteId !== filtroLote) return;
+    const col = porLotes ? (loteId || 'sem') : data.slice(5, 7);
+    L[linha] = L[linha] || {};
+    L[linha][col] = (L[linha][col] || 0) + v;
+  };
+
+  // Receita e custo do gado vendido
+  DB.bovinos.list().forEach(b => {
+    if (b.status === 'vendido' && b.dataSaida) {
+      add('receita', b.dataSaida, b.loteId || 'sem', b.receitaSaida || 0);
+      add('cpv', b.dataSaida, b.loteId || 'sem', b.custoEntrada || 0);
+    }
+    add('compraGado', b.dataEntrada, b.loteId || 'sem', b.custoEntrada || 0);
+  });
+  // vendas lançadas sem animais cadastrados (ex.: lote vendido antes de entrar no app)
+  DB.vendas.list().filter(v => !v.bovinoIds?.length).forEach(v => {
+    add('receita', v.data, v.loteId || 'sem', v.valorTotal || 0);
+    add('cpv', v.data, v.loteId || 'sem', v.custoGadoVendido || 0);
+  });
+
+  // Despesas por categoria (depreciação separada)
+  const isDep = d => /deprecia/i.test(`${d.fornecedor} ${d.categoria}`);
+  const catsDesp = new Set();
+  DB.despesas.list().forEach(d => {
+    const linha = isDep(d) ? 'dep' : 'desp:' + (d.categoria || 'Outros');
+    if (!isDep(d)) catsDesp.add(d.categoria || 'Outros');
+    Object.entries(Views._dreDespesaPorLote(d)).forEach(([lid, v]) => add(linha, d.data, lid, v));
+  });
+
+  // Investimentos (CAPEX) por categoria — não têm lote
+  const catsInv = new Set();
+  DB.investimentos.list().forEach(i => {
+    if (filtroLote !== 'todos' && !porLotes) return;
+    if (!noAno(i.data)) return;
+    catsInv.add(i.categoria || 'Outros');
+    const col = porLotes ? 'fazenda' : i.data.slice(5, 7);
+    const k = 'inv:' + (i.categoria || 'Outros');
+    L[k] = L[k] || {}; L[k][col] = (L[k][col] || 0) + (i.valor || 0);
+  });
+
+  // colunas
+  let cols;
+  if (porLotes) {
+    const usados = new Set();
+    Object.values(L).forEach(o => Object.keys(o).forEach(k => usados.add(k)));
+    cols = lotes.filter(l => usados.has(l.id)).map(l => ({ key: l.id, label: rotLote(l) }));
+    if (usados.has('sem')) cols.push({ key: 'sem', label: 'Sem lote' });
+    if (usados.has('fazenda')) cols.push({ key: 'fazenda', label: 'Fazenda (geral)' });
+  } else {
+    cols = MESES.map((m, i) => ({ key: String(i + 1).padStart(2, '0'), label: m }));
+  }
+
+  const soma = (...chaves) => {
+    const o = {};
+    chaves.forEach(([k, sinal]) => Object.entries(L[k] || {}).forEach(([c, v]) => { o[c] = (o[c] || 0) + sinal * v; }));
+    return o;
+  };
+  const tot = o => Object.values(o || {}).reduce((s, v) => s + v, 0);
+  const cats = [...catsDesp].sort((a, b) => tot(L['desp:' + b]) - tot(L['desp:' + a]));
+  const despTotal = soma(...cats.map(c => ['desp:' + c, 1]));
+  const receita = L.receita || {};
+  const margemBruta = soma(['receita', 1], ['cpv', -1]);
+  const ebitda = soma(['receita', 1], ['cpv', -1], ...cats.map(c => ['desp:' + c, -1]));
+  const resultado = soma(['receita', 1], ['cpv', -1], ...cats.map(c => ['desp:' + c, -1]), ['dep', -1]);
+  const invCats = [...catsInv].sort((a, b) => tot(L['inv:' + b]) - tot(L['inv:' + a]));
+  const capex = soma(...invCats.map(c => ['inv:' + c, 1]));
+  const totalInvestido = soma(...invCats.map(c => ['inv:' + c, 1]), ['compraGado', 1]);
+
+  const fmt = (v, neg) => {
+    if (!v || Math.abs(v) < 0.005) return '<span class="text-stone-300">—</span>';
+    const s = U.money(Math.abs(v)).replace('R$', '').trim();
+    return (neg || v < 0) ? `(${s})` : s;
+  };
+  const cls = v => v > 0.005 ? 'text-money-pos' : v < -0.005 ? 'text-money-neg' : '';
+  const row = (label, o, opt = {}) => {
+    const t = tot(o);
+    const corTotal = opt.resultado ? cls(t) : '';
+    return `<tr class="${opt.strong ? 'font-semibold bg-stone-50' : ''} ${opt.sub ? 'text-stone-600' : ''}">
+      <td class="whitespace-nowrap sticky left-0 bg-white ${opt.strong ? '!bg-stone-50' : ''} ${opt.sub ? 'pl-6' : ''}">${label}</td>
+      ${cols.map(c => `<td class="text-right whitespace-nowrap tabular-nums ${opt.resultado ? cls((o || {})[c.key]) : ''}">${fmt((o || {})[c.key], opt.neg)}</td>`).join('')}
+      <td class="text-right whitespace-nowrap tabular-nums font-semibold ${corTotal}">${fmt(t, opt.neg)}</td>
+      ${opt.pct === false ? '<td></td>' : `<td class="text-right text-xs text-stone-500 tabular-nums">${tot(receita) ? U.num((t / tot(receita)) * 100, 1) + '%' : ''}</td>`}
+    </tr>`;
+  };
+  const head = `<thead><tr><th class="sticky left-0 bg-white">R$</th>${cols.map(c => `<th class="text-right">${c.label}</th>`).join('')}<th class="text-right">Total ${ano}</th><th class="text-right">% rec.</th></tr></thead>`;
+  const sel = (k, opts) => `<select class="select !w-auto" onchange="Views.dreSet('${k}', ${k === 'ano' ? '+this.value' : 'this.value'})">${opts.map(([v, l]) => `<option value="${v}" ${String(st[k]) === String(v) ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+
+  // rebanho em estoque no fim do período
+  const fimAno = ano + '-12-31';
+  const emEstoque = DB.bovinos.list().filter(b => b.dataEntrada <= fimAno && (!b.dataSaida || b.dataSaida > fimAno))
+    .filter(b => filtroLote === 'todos' || b.loteId === filtroLote);
+  const estoqueEntrada = U.sum(emEstoque, b => b.custoEntrada || 0);
+  const estoqueOper = U.sum(emEstoque, b => DB.rateio.custoOperacionalBovino(b.id));
+
+  const kpi = (label, v, sub, cor = true) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value whitespace-nowrap ${cor ? cls(v) : ''}">${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(v)}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
+
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      ${sel('ano', listaAnos.map(a => [a, a]))}
+      ${sel('colunas', [['meses', 'Colunas: meses'], ['lotes', 'Colunas: lotes']])}
+      ${porLotes ? '' : sel('lote', [['todos', 'Todos os lotes'], ...lotes.map(l => [l.id, rotLote(l)])])}
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      ${kpi('Receita de vendas', tot(receita), 'gado vendido no período')}
+      ${kpi('Despesas operacionais', -tot(despTotal) - tot(L.dep), 'inclui depreciação')}
+      ${kpi('Resultado do período', tot(resultado), 'receita − custo do gado vendido − despesas')}
+      ${kpi('Investido no período', tot(totalInvestido), 'compra de gado + CAPEX', false)}
+    </div>
+
+    <div class="card p-0 mb-4">
+      <div class="card-title px-4 pt-4">DRE ${ano}${filtroLote !== 'todos' ? ' — ' + U.esc(rotLote({ nome: nomeLote(filtroLote) })) : ''}</div>
+      <div class="overflow-x-auto">
+        <table class="table text-sm">
+          ${head}
+          <tbody>
+            ${row('(+) Receita bruta de vendas de gado', receita)}
+            ${row('(−) Custo do gado vendido (compra)', L.cpv, { neg: true })}
+            ${row('= Margem bruta', margemBruta, { strong: true, resultado: true })}
+            ${row('(−) Despesas operacionais', despTotal, { neg: true })}
+            ${cats.map(c => row(U.esc(c), L['desp:' + c], { neg: true, sub: true })).join('')}
+            ${row('= Resultado operacional (EBITDA)', ebitda, { strong: true, resultado: true })}
+            ${row('(−) Depreciação', L.dep, { neg: true })}
+            ${row('= Resultado do período', resultado, { strong: true, resultado: true })}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-xs text-stone-500 px-4 pb-4 pt-2 space-y-1">
+        <div>Despesas entram no mês da data do lançamento e no lote conforme o rateio de cada despesa. O custo de compra só vira custo quando o animal é vendido; até lá fica no rebanho em estoque.</div>
+        <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Obras da sede não fazem parte do app.</div>
+      </div>
+    </div>
+
+    <div class="card p-0 mb-4">
+      <div class="card-title px-4 pt-4">Investimentos no período</div>
+      <div class="overflow-x-auto">
+        <table class="table text-sm">
+          ${head.replace('% rec.', '')}
+          <tbody>
+            ${row('Compra de gado (reposição do rebanho)', L.compraGado, { pct: false })}
+            ${row('CAPEX — máquinas, benfeitorias, pasto', capex, { pct: false })}
+            ${invCats.map(c => row(U.esc(c), L['inv:' + c], { sub: true, pct: false })).join('')}
+            ${row('= Total investido', totalInvestido, { strong: true, pct: false })}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-xs text-stone-500 px-4 pb-4 pt-2">
+        ${porLotes ? 'CAPEX não tem lote: aparece na coluna "Fazenda (geral)". ' : filtroLote !== 'todos' ? 'CAPEX não tem lote e fica fora quando um lote está filtrado. ' : ''}A compra de gado é pela data de entrada e custo de entrada de cada animal. Os investimentos não entram no resultado; o trator entra na DRE só pela depreciação.
+        ${DB.investimentos.list().filter(i => noAno(i.data)).length ? '' : ' <strong>Nenhum investimento (CAPEX) lançado em ' + ano + '.</strong> <a class="underline" href="#/investimentos">Lançar investimentos</a>'}
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      ${kpi('Rebanho em estoque (fim de ' + ano + ')', estoqueEntrada + estoqueOper, `${emEstoque.length} cabeças`, false)}
+      ${kpi('Custo de compra em estoque', estoqueEntrada, 'ainda não virou custo na DRE', false)}
+      ${kpi('Custo operacional já alocado', estoqueOper, 'despesas atribuídas a esses animais (todos os anos)', false)}
+    </div>
+  `;
+};

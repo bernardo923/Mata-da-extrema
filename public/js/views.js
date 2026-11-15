@@ -2176,14 +2176,12 @@ Views.dre = function () {
   DB.bovinos.list().forEach(b => {
     if (b.status === 'vendido' && b.dataSaida) {
       add('receita', b.dataSaida, b.loteId || 'sem', b.receitaSaida || 0);
-      add('cpv', b.dataSaida, b.loteId || 'sem', b.custoEntrada || 0);
     }
     add('compraGado', b.dataEntrada, b.loteId || 'sem', b.custoEntrada || 0);
   });
   // vendas lançadas sem animais cadastrados (ex.: lote vendido antes de entrar no app)
   DB.vendas.list().filter(v => !v.bovinoIds?.length).forEach(v => {
     add('receita', v.data, v.loteId || 'sem', v.valorTotal || 0);
-    add('cpv', v.data, v.loteId || 'sem', v.custoGadoVendido || 0);
   });
 
   // Despesas por categoria (depreciação separada)
@@ -2227,12 +2225,12 @@ Views.dre = function () {
   const cats = [...catsDesp].sort((a, b) => tot(L['desp:' + b]) - tot(L['desp:' + a]));
   const despTotal = soma(...cats.map(c => ['desp:' + c, 1]));
   const receita = L.receita || {};
-  const margemBruta = soma(['receita', 1], ['cpv', -1]);
-  const ebitda = soma(['receita', 1], ['cpv', -1], ...cats.map(c => ['desp:' + c, -1]));
-  const resultado = soma(['receita', 1], ['cpv', -1], ...cats.map(c => ['desp:' + c, -1]), ['dep', -1]);
+  const margemBruta = soma(['receita', 1], ['compraGado', -1]);
+  const ebitda = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]));
+  const resultado = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]), ['dep', -1]);
   const invCats = [...catsInv].sort((a, b) => tot(L['inv:' + b]) - tot(L['inv:' + a]));
   const capex = soma(...invCats.map(c => ['inv:' + c, 1]));
-  const totalInvestido = soma(...invCats.map(c => ['inv:' + c, 1]), ['compraGado', 1]);
+  const totalInvestido = capex;
 
   const fmt = (v, neg) => {
     if (!v || Math.abs(v) < 0.005) return '<span class="text-stone-300">—</span>';
@@ -2272,8 +2270,8 @@ Views.dre = function () {
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${kpi('Receita de vendas', tot(receita), 'gado vendido no período')}
       ${kpi('Despesas operacionais', -tot(despTotal) - tot(L.dep), 'inclui depreciação')}
-      ${kpi('Resultado do período', tot(resultado), 'receita − custo do gado vendido − despesas')}
-      ${kpi('Investido no período', tot(totalInvestido), 'compra de gado + CAPEX', false)}
+      ${kpi('Resultado do período', tot(resultado), 'receita − compra de gado − despesas')}
+      ${kpi('Investido no período', tot(totalInvestido), 'CAPEX: máquinas, benfeitorias, pasto', false)}
     </div>
 
     <div class="card p-0 mb-4">
@@ -2283,7 +2281,7 @@ Views.dre = function () {
           ${head}
           <tbody>
             ${row('(+) Receita bruta de vendas de gado', receita)}
-            ${row('(−) Custo do gado vendido (compra)', L.cpv, { neg: true })}
+            ${row('(−) Compra de gado no período', L.compraGado, { neg: true })}
             ${row('= Margem bruta', margemBruta, { strong: true, resultado: true })}
             ${row('(−) Despesas operacionais', despTotal, { neg: true })}
             ${cats.map(c => row(U.esc(c), L['desp:' + c], { neg: true, sub: true })).join('')}
@@ -2294,7 +2292,7 @@ Views.dre = function () {
         </table>
       </div>
       <div class="text-xs text-stone-500 px-4 pb-4 pt-2 space-y-1">
-        <div>Despesas entram no mês da data do lançamento e no lote conforme o rateio de cada despesa. O custo de compra só vira custo quando o animal é vendido; até lá fica no rebanho em estoque.</div>
+        <div>Despesas entram no mês da data do lançamento e no lote conforme o rateio de cada despesa. A compra de gado entra como custo no mês e no lote da entrada dos animais (custo de entrada de cada animal).</div>
         <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Obras da sede não fazem parte do app.</div>
       </div>
     </div>
@@ -2305,7 +2303,6 @@ Views.dre = function () {
         <table class="table text-sm">
           ${head.replace('% rec.', '')}
           <tbody>
-            ${row('Compra de gado (reposição do rebanho)', L.compraGado, { pct: false })}
             ${row('CAPEX — máquinas, benfeitorias, pasto', capex, { pct: false })}
             ${invCats.map(c => row(U.esc(c), L['inv:' + c], { sub: true, pct: false })).join('')}
             ${row('= Total investido', totalInvestido, { strong: true, pct: false })}
@@ -2313,14 +2310,14 @@ Views.dre = function () {
         </table>
       </div>
       <div class="text-xs text-stone-500 px-4 pb-4 pt-2">
-        ${porLotes ? 'CAPEX não tem lote: aparece na coluna "Fazenda (geral)". ' : filtroLote !== 'todos' ? 'CAPEX não tem lote e fica fora quando um lote está filtrado. ' : ''}A compra de gado é pela data de entrada e custo de entrada de cada animal. Os investimentos não entram no resultado; o trator entra na DRE só pela depreciação.
+        ${porLotes ? 'CAPEX não tem lote: aparece na coluna "Fazenda (geral)". ' : filtroLote !== 'todos' ? 'CAPEX não tem lote e fica fora quando um lote está filtrado. ' : ''}A compra de gado está na DRE, como custo. Os investimentos não entram no resultado; o trator entra na DRE só pela depreciação.
         ${DB.investimentos.list().filter(i => noAno(i.data)).length ? '' : ' <strong>Nenhum investimento (CAPEX) lançado em ' + ano + '.</strong> <a class="underline" href="#/investimentos">Lançar investimentos</a>'}
       </div>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
       ${kpi('Rebanho em estoque (fim de ' + ano + ')', estoqueEntrada + estoqueOper, `${emEstoque.length} cabeças`, false)}
-      ${kpi('Custo de compra em estoque', estoqueEntrada, 'ainda não virou custo na DRE', false)}
+      ${kpi('Custo de compra em estoque', estoqueEntrada, 'custo de entrada dos animais no rebanho', false)}
       ${kpi('Custo operacional já alocado', estoqueOper, 'despesas atribuídas a esses animais (todos os anos)', false)}
     </div>
   `;

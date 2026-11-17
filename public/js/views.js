@@ -995,32 +995,125 @@ Views.loteDelete = function (id) {
 // ===========================================================================
 // DESPESAS
 // ===========================================================================
+Views._desp = { cat: '', sub: '', lote: '', ano: '', abertos: {} };
+Views.despSet = function (k, v) {
+  Views._desp[k] = v;
+  if (k === 'cat') Views._desp.sub = '';
+  App.render();
+};
+Views.despToggle = function (id) {
+  Views._desp.abertos[id] = !Views._desp.abertos[id];
+  App.render();
+};
+
 Views.despesas = function () {
-  const lista = [...DB.despesas.list()].sort((a, b) => b.data.localeCompare(a.data));
+  const st = Views._desp;
+  const todas = DB.despesas.list();
+  const anos = [...new Set(todas.map(d => (d.data || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  const sub = d => d.fornecedor || '(sem descrição)';
+  // filtros de lote e ano valem para o resumo; categoria/subcategoria filtram a lista
+  const base = todas.filter(d => (!st.lote || d.loteId === st.lote) && (!st.ano || (d.data || '').startsWith(st.ano)));
+  const lista = base
+    .filter(d => (!st.cat || d.categoria === st.cat) && (!st.sub || sub(d) === st.sub))
+    .sort((a, b) => b.data.localeCompare(a.data));
+  const total = U.sum(base, 'valor');
+
+  // resumo categoria → subcategoria
+  const porCat = {};
+  base.forEach(d => {
+    const c = porCat[d.categoria] = porCat[d.categoria] || { total: 0, n: 0, subs: {} };
+    c.total += d.valor || 0; c.n++;
+    const sc = c.subs[sub(d)] = c.subs[sub(d)] || { total: 0, n: 0 };
+    sc.total += d.valor || 0; sc.n++;
+  });
+  const cats = Object.entries(porCat).sort((a, b) => b[1].total - a[1].total);
+  const pct = v => total ? U.num(v / total * 100, 1) + '%' : '';
+  const q = v => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const subsDaCat = st.cat && porCat[st.cat] ? Object.keys(porCat[st.cat].subs).sort() : [];
+  const sel = (k, opts, vazio) => `<select class="select !w-auto" onchange="Views.despSet('${k}', this.value)">
+      <option value="">${vazio}</option>
+      ${opts.map(([v, l]) => `<option value="${U.esc(v)}" ${st[k] === v ? 'selected' : ''}>${U.esc(l)}</option>`).join('')}
+    </select>`;
+
+  const itensHTML = d => {
+    const itens = d.itens || [];
+    if (!itens.length) return `<div class="text-xs text-stone-500 py-2">Lançamento manual, sem itens de extrato vinculados.${d.observacoes ? ' ' + U.esc(d.observacoes) : ''}</div>`;
+    const soma = U.sum(itens, 'valor');
+    return `
+      <table class="w-full text-xs my-1">
+        <thead><tr class="text-stone-500"><th class="text-left font-medium py-1">Data</th><th class="text-left font-medium">Lançamento no extrato</th><th class="text-right font-medium">Valor no extrato</th><th class="text-right font-medium">Parte deste lote</th><th class="text-right font-medium">Considerado</th></tr></thead>
+        <tbody>
+          ${itens.map(i => `<tr class="border-t border-stone-200">
+            <td class="py-1 whitespace-nowrap">${U.formatDate(i.data)}</td>
+            <td>${U.esc(i.descricao)}</td>
+            <td class="text-right whitespace-nowrap">${U.money(i.valorExtrato)}</td>
+            <td class="text-right whitespace-nowrap">${U.num((i.parte || 0) * 100, 1)}%</td>
+            <td class="text-right whitespace-nowrap">${U.money(i.valor)}</td>
+          </tr>`).join('')}
+          <tr class="border-t border-stone-300 font-semibold"><td colspan="4" class="py-1">Total (${itens.length} lançamento${itens.length > 1 ? 's' : ''})</td><td class="text-right">${U.money(soma)}</td></tr>
+        </tbody>
+      </table>
+      ${d.observacoes ? `<div class="text-[11px] text-stone-500 pb-1">${U.esc(d.observacoes)}</div>` : ''}`;
+  };
+
   return `
-    <div class="flex items-center justify-between mb-4">
-      <div class="text-sm text-stone-500">${lista.length} despesa(s) — total ${U.money(U.sum(lista, 'valor'))}</div>
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      ${sel('cat', cats.map(([c, o]) => [c, `${c} — ${U.money(o.total)}`]), 'Todas as categorias')}
+      ${st.cat ? sel('sub', subsDaCat.map(x => [x, `${x} — ${U.money(porCat[st.cat].subs[x].total)}`]), 'Todas as subcategorias') : ''}
+      ${sel('lote', DB.lotes.list().map(l => [l.id, /^lote/i.test(l.nome) ? l.nome : 'Lote ' + l.nome]), 'Todos os lotes')}
+      ${sel('ano', anos.map(a => [a, a]), 'Todos os anos')}
+      ${(st.cat || st.sub || st.lote || st.ano) ? `<button class="btn btn-secondary" onclick="Views._desp = { cat: '', sub: '', lote: '', ano: '', abertos: {} }; App.render()">Limpar filtros</button>` : ''}
+      <div class="flex-1"></div>
       <button class="btn btn-primary" onclick="Views.despesaForm()">+ Nova despesa</button>
     </div>
-    <div class="card p-0">
+
+    <div class="card p-0 mb-4">
+      <div class="card-title px-4 pt-4">Por categoria e subcategoria <span class="text-xs font-normal text-stone-500">— clique para filtrar</span></div>
+      <div class="overflow-x-auto">
+      <table class="table text-sm">
+        <thead><tr><th>Categoria / subcategoria</th><th class="text-right">Lançamentos</th><th class="text-right">Valor</th><th class="text-right">%</th></tr></thead>
+        <tbody>
+          ${cats.map(([c, o]) => `
+            <tr class="clickable font-semibold ${st.cat === c && !st.sub ? 'bg-lime-50' : 'bg-stone-50'}" onclick="Views.despSet('cat', '${q(c)}')">
+              <td>${U.esc(c)}</td><td class="text-right">${o.n}</td><td class="text-right">${U.money(o.total)}</td><td class="text-right text-stone-500">${pct(o.total)}</td>
+            </tr>
+            ${Object.entries(o.subs).sort((a, b) => b[1].total - a[1].total).map(([sc, so]) => `
+              <tr class="clickable text-stone-600 ${st.cat === c && st.sub === sc ? 'bg-lime-50' : ''}" onclick="Views._desp.cat='${q(c)}'; Views.despSet('sub', '${q(sc)}')">
+                <td class="pl-8">${U.esc(sc)}</td><td class="text-right">${so.n}</td><td class="text-right">${U.money(so.total)}</td><td class="text-right text-stone-500">${pct(so.total)}</td>
+              </tr>`).join('')}
+          `).join('') || `<tr><td colspan="4" class="text-center text-stone-500 py-6">Nenhuma despesa</td></tr>`}
+          ${cats.length ? `<tr class="font-semibold border-t-2"><td>Total</td><td class="text-right">${base.length}</td><td class="text-right">${U.money(total)}</td><td></td></tr>` : ''}
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="text-sm text-stone-500 mb-2">${lista.length} despesa(s)${st.cat ? ' em ' + U.esc(st.cat) : ''}${st.sub ? ' › ' + U.esc(st.sub) : ''} — total ${U.money(U.sum(lista, 'valor'))}. Clique em ▸ para ver os lançamentos considerados.</div>
+    <div class="card p-0 overflow-x-auto">
       <table class="table">
-        <thead><tr><th>Data</th><th>Fornecedor</th><th>Categoria</th><th>Rateio</th><th>Escopo</th><th class="text-right">Valor</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Data</th><th>Subcategoria</th><th>Categoria</th><th>Escopo</th><th class="text-right">Lanç.</th><th class="text-right">Valor</th><th></th></tr></thead>
         <tbody>
           ${lista.map(d => {
             const lote = d.loteId ? DB.lotes.get(d.loteId)?.nome : '';
             const escopo = d.rateioEscopo === 'lote' ? `Lote: ${U.esc(lote || '?')}` : (d.rateioEscopo === 'manual' ? 'Manual' : 'Todos ativos');
+            const aberto = !!st.abertos[d.id];
             return `
-              <tr class="clickable" onclick="Views.despesaForm('${d.id}')">
-                <td>${U.formatDate(d.data)}</td>
+              <tr class="clickable" onclick="Views.despToggle('${d.id}')">
+                <td class="w-6 text-stone-400">${aberto ? '▾' : '▸'}</td>
+                <td class="whitespace-nowrap">${U.formatDate(d.data)}</td>
                 <td>${U.esc(d.fornecedor)}</td>
                 <td><span class="badge">${U.esc(d.categoria)}</span></td>
-                <td>${U.esc(d.rateioTipo)}</td>
-                <td class="text-stone-500 text-xs">${escopo}</td>
-                <td class="text-right text-money-neg">${U.money(d.valor)}</td>
-                <td onclick="event.stopPropagation()"><button class="btn btn-icon" onclick="Views.despesaDelete('${d.id}')">×</button></td>
+                <td class="text-stone-500 text-xs whitespace-nowrap">${escopo}</td>
+                <td class="text-right text-stone-500">${(d.itens || []).length || '—'}</td>
+                <td class="text-right text-money-neg whitespace-nowrap">${U.money(d.valor)}</td>
+                <td class="whitespace-nowrap" onclick="event.stopPropagation()">
+                  <button class="btn btn-icon" title="Editar" onclick="Views.despesaForm('${d.id}')">✎</button>
+                  <button class="btn btn-icon" title="Excluir" onclick="Views.despesaDelete('${d.id}')">×</button>
+                </td>
               </tr>
+              ${aberto ? `<tr><td></td><td colspan="7" class="bg-stone-50">${itensHTML(d)}</td></tr>` : ''}
             `;
-          }).join('') || `<tr><td colspan="7" class="text-center text-stone-500 py-8">Nenhuma despesa registrada</td></tr>`}
+          }).join('') || `<tr><td colspan="8" class="text-center text-stone-500 py-8">Nenhuma despesa registrada</td></tr>`}
         </tbody>
       </table>
     </div>

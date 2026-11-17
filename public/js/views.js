@@ -2227,13 +2227,15 @@ Views.dre = function () {
     Object.entries(Views._dreDespesaPorLote(d)).forEach(([lid, v]) => add(linha, d.data, lid, v));
   });
 
-  // Investimentos (CAPEX) por categoria — não têm lote
+  // Investimentos (CAPEX) por categoria. Só têm lote quando são cabeças de gado
+  // tratadas como investimento (abateCompraGado): saem da compra de gado da DRE.
   const catsInv = new Set();
   DB.investimentos.list().forEach(i => {
-    if (filtroLote !== 'todos' && !porLotes) return;
+    if (filtroLote !== 'todos' && !porLotes && i.loteId !== filtroLote) return;
     if (!noAno(i.data)) return;
+    if (i.abateCompraGado) add('compraGado', i.data, i.loteId || 'sem', -(i.valor || 0));
     catsInv.add(i.categoria || 'Outros');
-    const col = porLotes ? 'fazenda' : i.data.slice(5, 7);
+    const col = porLotes ? (i.loteId || 'fazenda') : i.data.slice(5, 7);
     const k = 'inv:' + (i.categoria || 'Outros');
     L[k] = L[k] || {}; L[k][col] = (L[k][col] || 0) + (i.valor || 0);
   });
@@ -2345,7 +2347,7 @@ Views.dre = function () {
         </table>
       </div>
       <div class="text-xs text-stone-500 px-4 pb-4 pt-2">
-        ${porLotes ? 'CAPEX não tem lote: aparece na coluna "Fazenda (geral)". ' : filtroLote !== 'todos' ? 'CAPEX não tem lote e fica fora quando um lote está filtrado. ' : ''}A compra de gado está na DRE, como custo. Os investimentos não entram no resultado; o trator entra na DRE só pela depreciação.
+        ${porLotes ? 'CAPEX não tem lote: aparece na coluna "Fazenda (geral)". ' : filtroLote !== 'todos' ? 'CAPEX não tem lote e fica fora quando um lote está filtrado. ' : ''}A compra de gado está na DRE, como custo, exceto as cabeças lançadas como investimento em gado (saem da compra do lote). Os investimentos não entram no resultado; o trator entra na DRE só pela depreciação.
         ${DB.investimentos.list().filter(i => noAno(i.data)).length ? '' : ' <strong>Nenhum investimento (CAPEX) lançado em ' + ano + '.</strong> <a class="underline" href="#/investimentos">Lançar investimentos</a>'}
       </div>
     </div>

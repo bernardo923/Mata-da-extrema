@@ -210,6 +210,7 @@ const CATEGORIAS_INVESTIMENTO = [
   'Curral',
   'Cercas',
   'Maquinário',
+  'Gado (investimento)',
   'Veículos',
   'Benfeitorias',
   'Reservatório / Água',

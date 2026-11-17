@@ -88,6 +88,7 @@ const DB = {
     const r = await this._fetch('/api/state');
     if (!r.ok) throw new Error('Falha ao carregar estado');
     const j = await r.json();
+    this._updatedAt = j.updated_at || null;
     if (j.data && Object.keys(j.data).length) {
       this.state = {
         ...this.state,
@@ -173,9 +174,18 @@ const DB = {
     try {
       const r = await this._fetch('/api/state', {
         method: 'PUT',
-        body: JSON.stringify({ data: this.state }),
+        body: JSON.stringify({ data: this.state, baseUpdatedAt: this._updatedAt }),
       });
+      if (r.status === 409) {
+        // Outro aparelho/aba salvou depois que esta tela carregou: não sobrescreve.
+        this._lastSyncStatus = 'error';
+        if (typeof U !== 'undefined') U.toast('Os dados foram alterados em outro aparelho. Recarregando a versão mais nova — refaça a última alteração.', 'error');
+        setTimeout(() => location.reload(), 2500);
+        return;
+      }
       if (!r.ok) throw new Error('Falha ao salvar (' + r.status + ')');
+      const j = await r.json().catch(() => ({}));
+      if (j.updated_at) this._updatedAt = j.updated_at;
       this._lastSyncStatus = 'ok';
     } catch (e) {
       console.error('[sync]', e);

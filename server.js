@@ -125,15 +125,32 @@ app.put('/api/state', auth, async (req, res) => {
   if (typeof data !== 'object' || data === null) {
     return res.status(400).json({ error: 'invalid payload' });
   }
+  // Controle de concorrência: o cliente manda a versão (updated_at) que carregou.
+  // Se outro aparelho salvou depois, recusa com 409 para não sobrescrever.
+  const base = req.body.baseUpdatedAt || null;
   try {
     if (!pool) {
+      if (memoryFallback.updated_at && base !== memoryFallback.updated_at) {
+        return res.status(409).json({ error: 'conflict', updated_at: memoryFallback.updated_at });
+      }
       memoryFallback = { data, updated_at: new Date().toISOString() };
       return res.json({ ok: true, updated_at: memoryFallback.updated_at });
     }
-    const r = await pool.query(
-      'UPDATE farm_state SET data = $1::jsonb, updated_at = NOW() WHERE id = 1 RETURNING updated_at',
-      [JSON.stringify(data)]
-    );
+    // Sem versão base (tela antiga, aberta antes desta atualização): só grava se a linha ainda não tem dados.
+    const r = base
+      ? await pool.query(
+          `UPDATE farm_state SET data = $1::jsonb, updated_at = NOW()
+            WHERE id = 1 AND date_trunc('milliseconds', updated_at) = date_trunc('milliseconds', $2::timestamptz)
+            RETURNING updated_at`,
+          [JSON.stringify(data), base])
+      : await pool.query(
+          `UPDATE farm_state SET data = $1::jsonb, updated_at = NOW()
+            WHERE id = 1 AND (data IS NULL OR data = '{}'::jsonb) RETURNING updated_at`,
+          [JSON.stringify(data)]);
+    if (!r.rows.length) {
+      const cur = await pool.query('SELECT updated_at FROM farm_state WHERE id = 1');
+      return res.status(409).json({ error: 'conflict', updated_at: cur.rows[0] && cur.rows[0].updated_at });
+    }
     res.json({ ok: true, updated_at: r.rows[0].updated_at });
   } catch (e) {
     console.error('[PUT /api/state]', e);

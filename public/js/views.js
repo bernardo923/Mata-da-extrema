@@ -995,7 +995,7 @@ Views.loteDelete = function (id) {
 // ===========================================================================
 // DESPESAS
 // ===========================================================================
-Views._desp = { cat: '', sub: '', lote: '', ano: '', abertos: {} };
+Views._desp = { cat: '', sub: '', lote: '', ano: '', abertos: {}, modo: 'lancamentos' };
 Views.despSet = function (k, v) {
   Views._desp[k] = v;
   if (k === 'cat') Views._desp.sub = '';
@@ -1062,7 +1062,7 @@ Views.despesas = function () {
       ${st.cat ? sel('sub', subsDaCat.map(x => [x, `${x} — ${U.money(porCat[st.cat].subs[x].total)}`]), 'Todas as subcategorias') : ''}
       ${sel('lote', DB.lotes.list().map(l => [l.id, /^lote/i.test(l.nome) ? l.nome : 'Lote ' + l.nome]), 'Todos os lotes')}
       ${sel('ano', anos.map(a => [a, a]), 'Todos os anos')}
-      ${(st.cat || st.sub || st.lote || st.ano) ? `<button class="btn btn-secondary" onclick="Views._desp = { cat: '', sub: '', lote: '', ano: '', abertos: {} }; App.render()">Limpar filtros</button>` : ''}
+      ${(st.cat || st.sub || st.lote || st.ano) ? `<button class="btn btn-secondary" onclick="Object.assign(Views._desp, { cat: '', sub: '', lote: '', ano: '', abertos: {} }); App.render()">Limpar filtros</button>` : ''}
       <div class="flex-1"></div>
       <button class="btn btn-primary" onclick="Views.despesaForm()">+ Nova despesa</button>
     </div>
@@ -1088,6 +1088,13 @@ Views.despesas = function () {
       </div>
     </div>
 
+    <div class="flex flex-wrap items-center gap-2 mb-2">
+      <div class="inline-flex rounded border border-stone-300 overflow-hidden text-sm">
+        <button class="px-3 py-1 ${st.modo !== 'agrupado' ? 'bg-stone-800 text-white' : 'bg-white'}" onclick="Views.despSet('modo', 'lancamentos')">Lançamentos um por um</button>
+        <button class="px-3 py-1 ${st.modo === 'agrupado' ? 'bg-stone-800 text-white' : 'bg-white'}" onclick="Views.despSet('modo', 'agrupado')">Agrupado por mês e lote</button>
+      </div>
+    </div>
+    ${st.modo !== 'agrupado' ? Views._despLancamentos(lista, st) : `
     <div class="text-sm text-stone-500 mb-2">${lista.length} despesa(s)${st.cat ? ' em ' + U.esc(st.cat) : ''}${st.sub ? ' › ' + U.esc(st.sub) : ''} — total ${U.money(U.sum(lista, 'valor'))}. Clique em ▸ para ver os lançamentos considerados.</div>
     <div class="card p-0 overflow-x-auto">
       <table class="table">
@@ -1116,7 +1123,49 @@ Views.despesas = function () {
           }).join('') || `<tr><td colspan="8" class="text-center text-stone-500 py-8">Nenhuma despesa registrada</td></tr>`}
         </tbody>
       </table>
+    </div>`}
+  `;
+};
+
+// Um lançamento do extrato por linha (junta as partes de cada lote)
+Views._despLancamentos = function (lista, st) {
+  const nomeLote = id => DB.lotes.get(id)?.nome || '—';
+  const linhas = {};
+  lista.forEach(d => {
+    const itens = d.itens && d.itens.length ? d.itens
+      : [{ data: d.data, descricao: d.fornecedor || '(lançamento manual)', valorExtrato: d.valor, parte: 1, valor: d.valor, manual: true }];
+    itens.forEach(i => {
+      const k = i.manual ? 'm:' + d.id : [i.data, i.descricao, i.valorExtrato, d.fornecedor].join('|');
+      const L = linhas[k] = linhas[k] || { data: i.data, descricao: i.descricao, valorExtrato: i.valorExtrato, sub: d.fornecedor, cats: new Set(), partes: {}, total: 0, despId: i.manual ? d.id : null };
+      L.cats.add(d.categoria);
+      const lk = d.loteId || 'todos';
+      L.partes[lk] = (L.partes[lk] || 0) + (i.valor || 0);
+      L.total += i.valor || 0;
+    });
+  });
+  const rows = Object.values(linhas).sort((a, b) => b.data.localeCompare(a.data) || b.total - a.total);
+  const total = rows.reduce((s, r) => s + r.total, 0);
+  return `
+    <div class="text-sm text-stone-500 mb-2">${rows.length} lançamento(s)${st.cat ? ' em ' + U.esc(st.cat) : ''}${st.sub ? ' › ' + U.esc(st.sub) : ''}${st.lote ? ' — parte do lote ' + U.esc(nomeLote(st.lote)) : ''} — total ${U.money(total)}</div>
+    <div class="card p-0 overflow-x-auto">
+      <table class="table text-sm">
+        <thead><tr><th>Data</th><th>Lançamento no extrato</th><th>Subcategoria</th><th>Categoria</th><th class="text-right">Valor no extrato</th><th>Divisão entre lotes</th><th class="text-right">${st.lote ? 'Parte do lote' : 'Considerado'}</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr ${r.despId ? `class="clickable" onclick="Views.despesaForm('${r.despId}')"` : ''}>
+              <td class="whitespace-nowrap">${U.formatDate(r.data)}</td>
+              <td>${U.esc(r.descricao)}</td>
+              <td class="text-stone-600">${U.esc(r.sub || '')}</td>
+              <td>${[...r.cats].map(c => `<span class="badge">${U.esc(c)}</span>`).join(' ')}</td>
+              <td class="text-right whitespace-nowrap">${U.money(r.valorExtrato)}</td>
+              <td class="text-xs text-stone-500">${Object.entries(r.partes).map(([l, v]) => `${l === 'todos' ? 'Todos' : U.esc(nomeLote(l))}: ${U.money(v)}`).join(' · ')}</td>
+              <td class="text-right text-money-neg whitespace-nowrap">${U.money(r.total)}</td>
+            </tr>`).join('') || `<tr><td colspan="7" class="text-center text-stone-500 py-8">Nenhum lançamento</td></tr>`}
+          ${rows.length ? `<tr class="font-semibold border-t-2"><td colspan="6">Total</td><td class="text-right">${U.money(total)}</td></tr>` : ''}
+        </tbody>
+      </table>
     </div>
+    <div class="text-xs text-stone-500 mt-2">Cada linha é um lançamento do extrato. "Considerado" é a soma das partes rateadas para os lotes${st.lote ? ' (aqui só a parte do lote filtrado)' : ''}. Para editar o rateio, use "Agrupado por mês e lote".</div>
   `;
 };
 

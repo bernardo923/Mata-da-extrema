@@ -13,6 +13,7 @@ const DB = {
     racaoEntradas: [],
     racaoConsumos: [],
     contasPagar: [],
+    financiamentos: [],
     config: {
       kgPorSaco: 40,
       nomeFazenda: 'Mata da Extrema',
@@ -96,7 +97,7 @@ const DB = {
         config: { ...this.state.config, ...(j.data.config || {}) },
       };
     }
-    ['racaoEntradas', 'racaoConsumos', 'contasPagar'].forEach(k => {
+    ['racaoEntradas', 'racaoConsumos', 'contasPagar', 'financiamentos'].forEach(k => {
       if (!Array.isArray(this.state[k])) this.state[k] = [];
     });
     this._lastSyncStatus = 'ok';
@@ -215,7 +216,7 @@ const DB = {
   reset() {
     this.state = {
       bovinos: [], lotes: [], pesagens: [], despesas: [], investimentos: [], vendas: [],
-      racaoEntradas: [], racaoConsumos: [], contasPagar: [],
+      racaoEntradas: [], racaoConsumos: [], contasPagar: [], financiamentos: [],
       config: { nomeFazenda: 'Mata da Extrema', rendimentoCarcaca: 0.52, areaTotalHa: 0, areaPastoHa: 0, pesoUA: 450, kgPorSaco: 40 },
     };
     this.save();
@@ -423,6 +424,60 @@ const DB = {
     remove(id) {
       DB.state.investimentos = DB.state.investimentos.filter(i => i.id !== id);
       DB.save();
+    },
+  },
+
+  // ===== FINANCIAMENTOS =====
+  // { id, descricao, banco, dataContratacao, valor, taxaAA (%), vencimento, regime: 'composto'|'simples',
+  //   pagamentos: [{ id, data, valor, observacoes }], observacoes }
+  financiamentos: {
+    list() { if (!Array.isArray(DB.state.financiamentos)) DB.state.financiamentos = []; return DB.state.financiamentos; },
+    get(id) { return this.list().find(f => f.id === id); },
+    add(f) {
+      const novo = { id: U.uid(), descricao: '', banco: '', dataContratacao: U.todayISO(), valor: 0, taxaAA: 0, vencimento: '', regime: 'composto', pagamentos: [], observacoes: '', ...f };
+      this.list().push(novo); DB.save(); return novo;
+    },
+    update(id, patch) {
+      const l = this.list(); const i = l.findIndex(x => x.id === id);
+      if (i < 0) return; l[i] = { ...l[i], ...patch }; DB.save();
+    },
+    remove(id) { DB.state.financiamentos = this.list().filter(f => f.id !== id); DB.save(); },
+    addPagamento(id, p) {
+      const f = this.get(id); if (!f) return;
+      f.pagamentos = [...(f.pagamentos || []), { id: U.uid(), ...p }]; DB.save();
+    },
+    removePagamento(id, pid) {
+      const f = this.get(id); if (!f) return;
+      f.pagamentos = (f.pagamentos || []).filter(p => p.id !== pid); DB.save();
+    },
+    // Situação na data (ISO): { principal, juros, saldo, pago, jurosTotais }
+    // Juros corridos por dia, base 365. Composto: taxa efetiva anual capitalizada dia a dia.
+    // Simples: juros sobre o principal. Pagamentos abatem primeiro os juros, depois o principal.
+    situacao(f, ateISO) {
+      const dia = 86400000, d0 = Date.parse(f.dataContratacao), dFim = Date.parse(ateISO);
+      let principal = 0, juros = 0, pago = 0, jurosTotais = 0;
+      if (!f.dataContratacao || dFim < d0) return { principal, juros, saldo: 0, pago, jurosTotais };
+      principal = +f.valor || 0;
+      const i = (+f.taxaAA || 0) / 100;
+      const correr = (de, ate) => {
+        const t = Math.max(0, (ate - de) / dia) / 365;
+        const j = f.regime === 'simples' ? principal * i * t : (principal + juros) * (Math.pow(1 + i, t) - 1);
+        juros += j; jurosTotais += j;
+      };
+      let ult = d0;
+      [...(f.pagamentos || [])].filter(p => Date.parse(p.data) <= dFim).sort((a, b) => a.data.localeCompare(b.data)).forEach(p => {
+        const dp = Math.max(Date.parse(p.data), d0);
+        correr(ult, dp); ult = dp;
+        let v = +p.valor || 0; pago += v;
+        const aj = Math.min(v, juros); juros -= aj; v -= aj;
+        principal = Math.max(0, principal - v);
+      });
+      correr(ult, dFim);
+      return { principal, juros, saldo: principal + juros, pago, jurosTotais };
+    },
+    // Juros de competência entre duas datas (de exclusivo, ate inclusivo)
+    jurosEntre(f, deISO, ateISO) {
+      return Math.max(0, this.situacao(f, ateISO).jurosTotais - this.situacao(f, deISO).jurosTotais);
     },
   },
 

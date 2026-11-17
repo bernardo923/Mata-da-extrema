@@ -2382,6 +2382,21 @@ Views.dre = function () {
     L[k] = L[k] || {}; L[k][col] = (L[k][col] || 0) + (i.valor || 0);
   });
 
+  // Juros de financiamento (competência, sem lote)
+  if (filtroLote === 'todos') {
+    DB.financiamentos.list().forEach(f => {
+      for (let m = 1; m <= 12; m++) {
+        const mm = String(m).padStart(2, '0');
+        const de = m === 1 ? `${+ano - 1}-12-31` : Views._finUltimoDia(+ano, m - 1);
+        const ate = Views._finUltimoDia(+ano, m);
+        const j = DB.financiamentos.jurosEntre(f, de, ate);
+        if (j < 0.005) continue;
+        const col = porLotes ? 'fazenda' : mm;
+        L.juros = L.juros || {}; L.juros[col] = (L.juros[col] || 0) + j;
+      }
+    });
+  }
+
   // colunas
   let cols;
   if (porLotes) {
@@ -2405,7 +2420,7 @@ Views.dre = function () {
   const receita = L.receita || {};
   const margemBruta = soma(['receita', 1], ['compraGado', -1]);
   const ebitda = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]));
-  const resultado = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]), ['outras', 1], ['dep', -1]);
+  const resultado = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]), ['outras', 1], ['dep', -1], ['juros', -1]);
   const invCats = [...catsInv].sort((a, b) => tot(L['inv:' + b]) - tot(L['inv:' + a]));
   const capex = soma(...invCats.map(c => ['inv:' + c, 1]));
   const totalInvestido = capex;
@@ -2448,7 +2463,7 @@ Views.dre = function () {
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${kpi('Receita de vendas', tot(receita), 'gado vendido no período')}
       ${kpi('Despesas operacionais', -tot(despTotal) - tot(L.dep), 'inclui depreciação')}
-      ${kpi('Resultado do período', tot(resultado), 'gado − compra − despesas + outras receitas')}
+      ${kpi('Resultado do período', tot(resultado), 'gado − compra − despesas + outras receitas − juros')}
       ${kpi('Investido no período', tot(totalInvestido), 'CAPEX: máquinas, benfeitorias, pasto', false)}
     </div>
 
@@ -2466,13 +2481,14 @@ Views.dre = function () {
             ${row('= Resultado operacional (EBITDA)', ebitda, { strong: true, resultado: true })}
             ${row('(+) Outras receitas (não são de gado)', L.outras)}
             ${row('(−) Depreciação', L.dep, { neg: true })}
+            ${row('(−) Juros de financiamento', L.juros, { neg: true })}
             ${row('= Resultado do período', resultado, { strong: true, resultado: true })}
           </tbody>
         </table>
       </div>
       <div class="text-xs text-stone-500 px-4 pb-4 pt-2 space-y-1">
         <div>Despesas entram no mês da data do lançamento e no lote conforme o rateio de cada despesa. A compra de gado entra como custo no mês e no lote da entrada dos animais (custo de entrada de cada animal).</div>
-        <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Outras receitas não têm lote${porLotes ? ' (coluna "Fazenda (geral)")' : filtroLote !== 'todos' ? ' e ficam fora com lote filtrado' : ''}; % rec. é sobre a receita de gado. Obras da sede não fazem parte do app.</div>
+        <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Outras receitas e juros de financiamento não têm lote${porLotes ? ' (coluna "Fazenda (geral)")' : filtroLote !== 'todos' ? ' e ficam fora com lote filtrado' : ''}; % rec. é sobre a receita de gado. Obras da sede não fazem parte do app.</div>
       </div>
     </div>
 
@@ -2500,4 +2516,171 @@ Views.dre = function () {
       ${kpi('Custo operacional já alocado', estoqueOper, 'despesas atribuídas a esses animais (todos os anos)', false)}
     </div>
   `;
+};
+
+// ===========================================================================
+// FINANCIAMENTOS
+// ===========================================================================
+Views._finUltimoDia = (ano, mes) => new Date(Date.UTC(ano, mes, 0)).toISOString().slice(0, 10); // mes 1..12
+
+// Cronograma mensal: [{ mes:'YYYY-MM', juros, pagamentos, saldo }]
+Views._finCronograma = function (f) {
+  if (!f.dataContratacao) return [];
+  const fim = f.vencimento && f.vencimento > f.dataContratacao ? f.vencimento : f.dataContratacao;
+  let [a, m] = f.dataContratacao.split('-').map(Number);
+  const out = []; let ant = f.dataContratacao;
+  while (true) {
+    const ym = `${a}-${String(m).padStart(2, '0')}`;
+    if (ym > fim.slice(0, 7)) break;
+    let ate = Views._finUltimoDia(a, m); if (ate > fim) ate = fim;
+    const s = DB.financiamentos.situacao(f, ate);
+    out.push({
+      mes: ym, ate,
+      juros: DB.financiamentos.jurosEntre(f, ant, ate),
+      pagamentos: U.sum((f.pagamentos || []).filter(p => p.data.slice(0, 7) === ym), p => +p.valor || 0),
+      saldo: s.saldo,
+    });
+    ant = ate; m++; if (m > 12) { m = 1; a++; }
+  }
+  return out;
+};
+
+Views.financiamentos = function () {
+  const lista = DB.financiamentos.list();
+  const hoje = U.todayISO();
+  const brl0 = v => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(v || 0);
+  const kpi = (label, v, sub) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value whitespace-nowrap">${v}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
+  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const rotMes = ym => MESES[+ym.slice(5) - 1] + '/' + ym.slice(0, 4);
+
+  const blocos = lista.map(f => {
+    const sHoje = DB.financiamentos.situacao(f, hoje < f.dataContratacao ? f.dataContratacao : hoje);
+    const sVenc = f.vencimento ? DB.financiamentos.situacao(f, f.vencimento) : null;
+    const dias = f.vencimento ? U.daysBetween(hoje, f.vencimento) : null;
+    const crono = Views._finCronograma(f);
+    const mesAtual = hoje.slice(0, 7);
+    // juros por ano (competência)
+    const porAno = {};
+    crono.forEach(c => { const y = c.mes.slice(0, 4); porAno[y] = (porAno[y] || 0) + c.juros; });
+    const pags = [...(f.pagamentos || [])].sort((a, b) => a.data.localeCompare(b.data));
+    return `
+      <div class="card mb-4">
+        <div class="flex flex-wrap items-start justify-between gap-2 mb-3">
+          <div>
+            <div class="card-title !mb-1">${U.esc(f.descricao || 'Financiamento')}</div>
+            <div class="text-sm text-stone-600">${U.esc(f.banco || '')}${f.banco ? ' · ' : ''}contratado em ${U.formatDate(f.dataContratacao)} · ${U.num(+f.taxaAA || 0, 2)}% a.a. (${f.regime === 'simples' ? 'juros simples' : 'juros compostos'}) · vencimento ${f.vencimento ? U.formatDate(f.vencimento) : '—'}</div>
+            ${f.observacoes ? `<div class="text-xs text-stone-500 mt-1">${U.esc(f.observacoes)}</div>` : ''}
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary" onclick="Views.finPagamentoForm('${f.id}')">+ Pagamento</button>
+            <button class="btn btn-secondary" onclick="Views.finForm('${f.id}')">Editar</button>
+            <button class="btn btn-secondary" onclick="Views.finDelete('${f.id}')">Excluir</button>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+          ${kpi('Valor contratado', brl0(f.valor))}
+          ${kpi('Juros corridos até hoje', brl0(sHoje.jurosTotais), hoje >= f.dataContratacao ? `${U.daysBetween(f.dataContratacao, hoje)} dias` : 'ainda não começou')}
+          ${kpi('Saldo devedor hoje', brl0(sHoje.saldo), sHoje.pago ? `já pago ${brl0(sHoje.pago)}` : 'nenhum pagamento lançado')}
+          ${kpi('A pagar no vencimento', sVenc ? brl0(sVenc.saldo) : '—', sVenc ? `juros totais ${brl0(sVenc.jurosTotais)}` : 'informe o vencimento')}
+          ${kpi('Faltam', dias != null ? (dias >= 0 ? `${dias} dias` : 'vencido') : '—', f.vencimento ? `até ${U.formatDate(f.vencimento)}` : '')}
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div class="lg:col-span-2 overflow-x-auto">
+            <div class="text-sm font-semibold mb-1">Evolução mês a mês</div>
+            <table class="table text-sm">
+              <thead><tr><th>Mês</th><th class="text-right">Juros do mês</th><th class="text-right">Pagamentos</th><th class="text-right">Saldo devedor no fim do mês</th></tr></thead>
+              <tbody>
+                ${crono.map(c => `<tr class="${c.mes === mesAtual ? 'bg-amber-50 font-semibold' : ''}">
+                  <td class="whitespace-nowrap">${rotMes(c.mes)}${c.mes === mesAtual ? ' · hoje' : ''}${c.ate === f.vencimento ? ' · vencimento' : ''}</td>
+                  <td class="text-right tabular-nums">${U.money(c.juros)}</td>
+                  <td class="text-right tabular-nums">${c.pagamentos ? U.money(c.pagamentos) : '<span class="text-stone-300">—</span>'}</td>
+                  <td class="text-right tabular-nums">${U.money(c.saldo)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div class="text-sm font-semibold mb-1">Juros por ano (vão para a DRE)</div>
+            <table class="table text-sm mb-4">
+              <tbody>${Object.entries(porAno).map(([y, v]) => `<tr><td>${y}</td><td class="text-right tabular-nums">${U.money(v)}</td></tr>`).join('')}
+              <tr class="font-semibold"><td>Total</td><td class="text-right tabular-nums">${U.money(U.sum(Object.values(porAno), v => v))}</td></tr></tbody>
+            </table>
+            <div class="text-sm font-semibold mb-1">Pagamentos</div>
+            ${pags.length ? `<table class="table text-sm"><tbody>${pags.map(p => `<tr><td class="whitespace-nowrap">${U.formatDate(p.data)}</td><td class="text-right tabular-nums">${U.money(p.valor)}</td><td class="text-xs text-stone-500">${U.esc(p.observacoes || '')}</td><td class="text-right"><button class="text-red-600" title="Excluir" onclick="Views.finPagamentoDelete('${f.id}','${p.id}')">×</button></td></tr>`).join('')}</tbody></table>`
+              : '<div class="text-xs text-stone-500">Nenhum pagamento lançado. Pagamentos abatem primeiro os juros e depois o principal.</div>'}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="flex justify-between items-center mb-4">
+      <div class="text-xs text-stone-500 max-w-2xl">Juros corridos dia a dia (base 365). Os juros entram na DRE mês a mês, na linha "Juros de financiamento", mesmo sem pagamento (competência). O valor recebido do banco não é receita, e o pagamento do principal não é despesa.</div>
+      <button class="btn btn-primary" onclick="Views.finForm()">+ Financiamento</button>
+    </div>
+    ${blocos || '<div class="card text-sm text-stone-500">Nenhum financiamento cadastrado.</div>'}
+  `;
+};
+
+Views.finForm = function (id) {
+  const f = id ? DB.financiamentos.get(id) : {};
+  const v = k => U.esc(f[k] ?? '');
+  U.modal(id ? 'Editar financiamento' : 'Novo financiamento', `
+    <form id="form-fin" class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="field-label">Descrição *</label><input class="input" name="descricao" value="${v('descricao')}" placeholder="ex.: Custeio pecuário" required /></div>
+      <div><label class="field-label">Banco</label><input class="input" name="banco" value="${v('banco')}" /></div>
+      <div><label class="field-label">Valor contratado (R$) *</label><input class="input" name="valor" type="number" step="0.01" min="0.01" value="${v('valor')}" required /></div>
+      <div><label class="field-label">Data do crédito *</label><input class="input" name="dataContratacao" type="date" value="${v('dataContratacao') || U.todayISO()}" required /></div>
+      <div><label class="field-label">Vencimento *</label><input class="input" name="vencimento" type="date" value="${v('vencimento')}" required /></div>
+      <div><label class="field-label">Taxa (% ao ano) *</label><input class="input" name="taxaAA" type="number" step="0.01" min="0" value="${v('taxaAA')}" required /></div>
+      <div><label class="field-label">Regime de juros</label><select class="select" name="regime">
+        <option value="composto" ${f.regime !== 'simples' ? 'selected' : ''}>Compostos (taxa efetiva)</option>
+        <option value="simples" ${f.regime === 'simples' ? 'selected' : ''}>Simples</option></select></div>
+      <div class="col-span-2"><label class="field-label">Observações</label><textarea class="textarea" name="observacoes" rows="2">${v('observacoes')}</textarea></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-fin').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      const dados = { ...fd, valor: parseFloat(fd.valor) || 0, taxaAA: parseFloat(fd.taxaAA) || 0 };
+      if (id) DB.financiamentos.update(id, dados); else DB.financiamentos.add(dados);
+      U.closeModal(); U.toast('Financiamento salvo', 'success'); App.render();
+    });
+  });
+};
+
+Views.finDelete = function (id) {
+  if (!U.confirm('Excluir este financiamento e os pagamentos dele?')) return;
+  DB.financiamentos.remove(id); U.toast('Financiamento excluído'); App.render();
+};
+
+Views.finPagamentoForm = function (id) {
+  U.modal('Pagamento do financiamento', `
+    <form id="form-finpag" class="grid grid-cols-2 gap-3">
+      <div><label class="field-label">Data *</label><input class="input" name="data" type="date" value="${U.todayISO()}" required /></div>
+      <div><label class="field-label">Valor (R$) *</label><input class="input" name="valor" type="number" step="0.01" min="0.01" required /></div>
+      <div class="col-span-2"><label class="field-label">Observações</label><input class="input" name="observacoes" placeholder="ex.: parcela de juros, quitação" /></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-finpag').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      DB.financiamentos.addPagamento(id, { data: fd.data, valor: parseFloat(fd.valor) || 0, observacoes: fd.observacoes });
+      U.closeModal(); U.toast('Pagamento lançado', 'success'); App.render();
+    });
+  });
+};
+
+Views.finPagamentoDelete = function (id, pid) {
+  if (!U.confirm('Excluir este pagamento?')) return;
+  DB.financiamentos.removePagamento(id, pid); App.render();
 };

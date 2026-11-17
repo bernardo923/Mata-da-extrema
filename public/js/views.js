@@ -1265,7 +1265,10 @@ Views.vendas = function () {
   return `
     <div class="flex items-center justify-between mb-4">
       <div class="text-sm text-stone-500">${lista.length} venda(s) — total ${U.money(U.sum(lista, 'valorTotal'))}</div>
-      <button class="btn btn-primary" onclick="Views.vendaForm()">+ Nova venda</button>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary" onclick="Views.receitaForm()">+ Outra receita</button>
+        <button class="btn btn-primary" onclick="Views.vendaForm()">+ Nova venda</button>
+      </div>
     </div>
     <div class="card p-0">
       <table class="table">
@@ -1274,8 +1277,8 @@ Views.vendas = function () {
           ${lista.map(v => `
             <tr>
               <td>${U.formatDate(v.data)}</td>
-              <td>${U.esc(v.comprador)}</td>
-              <td class="text-right">${v.bovinoIds.length}</td>
+              <td>${U.esc(v.comprador)}${v.tipo === 'outra' ? ' <span class="text-[11px] bg-stone-100 text-stone-600 rounded px-1.5 py-0.5">outra receita</span>' : ''}</td>
+              <td class="text-right">${v.tipo === 'outra' ? '—' : v.bovinoIds.length}</td>
               <td class="text-right">${U.num(v.pesoTotalKg, 0)}</td>
               <td class="text-right">${U.num(U.kgToArroba(v.pesoTotalKg), 1)}</td>
               <td class="text-right">${U.money(v.precoArroba)}</td>
@@ -1366,6 +1369,30 @@ Views.vendaForm = function () {
       });
       U.closeModal();
       U.toast('Venda registrada', 'success');
+      App.render();
+    });
+  });
+};
+
+Views.receitaForm = function () {
+  U.modal('Outra receita (não é venda de gado)', `
+    <form id="form-receita" class="grid grid-cols-2 gap-3">
+      <div><label class="field-label">Data *</label><input class="input" name="data" type="date" value="${U.todayISO()}" required /></div>
+      <div><label class="field-label">Valor (R$) *</label><input class="input" name="valor" type="number" step="0.01" min="0.01" required /></div>
+      <div class="col-span-2"><label class="field-label">Origem *</label><input class="input" name="comprador" placeholder="ex.: aluguel de antena, arrendamento, reembolso" required /></div>
+      <div class="col-span-2"><label class="field-label">Observações</label><textarea class="textarea" name="observacoes" rows="2"></textarea></div>
+      <div class="col-span-2 flex justify-end gap-2 pt-2 border-t border-stone-200">
+        <button type="button" class="btn btn-secondary" onclick="U.closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  `, body => {
+    body.querySelector('#form-receita').addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target).entries());
+      DB.vendas.add({ tipo: 'outra', data: fd.data, comprador: fd.comprador, observacoes: fd.observacoes, valorTotal: parseFloat(fd.valor) || 0 });
+      U.closeModal();
+      U.toast('Receita registrada', 'success');
       App.render();
     });
   });
@@ -2180,8 +2207,15 @@ Views.dre = function () {
     add('compraGado', b.dataEntrada, b.loteId || 'sem', b.custoEntrada || 0);
   });
   // vendas lançadas sem animais cadastrados (ex.: lote vendido antes de entrar no app)
-  DB.vendas.list().filter(v => !v.bovinoIds?.length).forEach(v => {
+  DB.vendas.list().filter(v => !v.bovinoIds?.length && v.tipo !== 'outra').forEach(v => {
     add('receita', v.data, v.loteId || 'sem', v.valorTotal || 0);
+  });
+
+  // Outras receitas (não são de gado): sem lote
+  DB.vendas.list().filter(v => v.tipo === 'outra').forEach(v => {
+    if (filtroLote !== 'todos' || !noAno(v.data)) return;
+    const col = porLotes ? 'fazenda' : v.data.slice(5, 7);
+    L.outras = L.outras || {}; L.outras[col] = (L.outras[col] || 0) + (v.valorTotal || 0);
   });
 
   // Despesas por categoria (depreciação separada)
@@ -2227,7 +2261,7 @@ Views.dre = function () {
   const receita = L.receita || {};
   const margemBruta = soma(['receita', 1], ['compraGado', -1]);
   const ebitda = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]));
-  const resultado = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]), ['dep', -1]);
+  const resultado = soma(['receita', 1], ['compraGado', -1], ...cats.map(c => ['desp:' + c, -1]), ['outras', 1], ['dep', -1]);
   const invCats = [...catsInv].sort((a, b) => tot(L['inv:' + b]) - tot(L['inv:' + a]));
   const capex = soma(...invCats.map(c => ['inv:' + c, 1]));
   const totalInvestido = capex;
@@ -2270,7 +2304,7 @@ Views.dre = function () {
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${kpi('Receita de vendas', tot(receita), 'gado vendido no período')}
       ${kpi('Despesas operacionais', -tot(despTotal) - tot(L.dep), 'inclui depreciação')}
-      ${kpi('Resultado do período', tot(resultado), 'receita − compra de gado − despesas')}
+      ${kpi('Resultado do período', tot(resultado), 'gado − compra − despesas + outras receitas')}
       ${kpi('Investido no período', tot(totalInvestido), 'CAPEX: máquinas, benfeitorias, pasto', false)}
     </div>
 
@@ -2286,6 +2320,7 @@ Views.dre = function () {
             ${row('(−) Despesas operacionais', despTotal, { neg: true })}
             ${cats.map(c => row(U.esc(c), L['desp:' + c], { neg: true, sub: true })).join('')}
             ${row('= Resultado operacional (EBITDA)', ebitda, { strong: true, resultado: true })}
+            ${row('(+) Outras receitas (não são de gado)', L.outras)}
             ${row('(−) Depreciação', L.dep, { neg: true })}
             ${row('= Resultado do período', resultado, { strong: true, resultado: true })}
           </tbody>
@@ -2293,7 +2328,7 @@ Views.dre = function () {
       </div>
       <div class="text-xs text-stone-500 px-4 pb-4 pt-2 space-y-1">
         <div>Despesas entram no mês da data do lançamento e no lote conforme o rateio de cada despesa. A compra de gado entra como custo no mês e no lote da entrada dos animais (custo de entrada de cada animal).</div>
-        <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Obras da sede não fazem parte do app.</div>
+        <div>Depreciação = despesas com "depreciação" no fornecedor ou categoria. Outras receitas não têm lote${porLotes ? ' (coluna "Fazenda (geral)")' : filtroLote !== 'todos' ? ' e ficam fora com lote filtrado' : ''}; % rec. é sobre a receita de gado. Obras da sede não fazem parte do app.</div>
       </div>
     </div>
 
